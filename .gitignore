@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+.output/
+.vinxi/
+.nitro/
+.tanstack/
+
+# env
+.env
+.env.*
+!.env.example
+
+# test
+coverage/
+test/fixtures/*.mp4
+test/fixtures/*.webm
+test/fixtures/*.mov
+test/fixtures/*.mkv
+
+# logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
