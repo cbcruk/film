@@ -264,3 +264,93 @@ button {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* 원본 프레임 미리보기 */
+.preview {
+  margin: 0 0 20px;
+}
+
+.preview-frame {
+  position: relative;
+  max-width: 100%;
+  max-height: 62vh;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: #000;
+}
+
+/* 화면에 맞춰 축소해서 보여줄 뿐, 실제 이미지는 원본 크기 */
+.preview-image,
+.preview-placeholder {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.preview-image[data-status='loading'] {
+  opacity: 0;
+}
+
+.preview-placeholder {
+  filter: blur(2px);
+}
+
+.preview-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.6);
+  color: #fff;
+  font-size: 12px;
+}
+
+.preview-badge.error {
+  color: #ffb4ab;
+}
+
+.preview-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+}
+
+.preview-time {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.preview-name {
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.formats {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.formats button {
+  padding: 3px 10px;
+  border: 0;
+  background: none;
+}
+
+.formats button[aria-checked='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.preview-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}

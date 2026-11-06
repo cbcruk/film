@@ -132,7 +132,7 @@ FILM_DIR=~/Movies/MV
 
 > 기준 영상: **유튜브 뮤직비디오** (3~6분, 1080p~4K, H.264/VP9/AV1). 대상이 사실상 이것뿐이라 별도 대용량·장시간 대응은 하지 않는다. 위 수치는 참고용 목표이며 엄격히 측정하지 않는다.
 > 설치된 ffmpeg 9.0.2에 해당 디코더(h264, vp9, libdav1d)가 모두 있음을 확인함.
-> | 메모리 | 영상을 메모리에 올리지 않는다. 프레임 응답은 스트리밍 |
+> | 메모리 | 영상을 메모리에 올리지 않는다. 프레임은 이미지 한 장만 메모리에 모은 뒤 응답 (4K PNG도 수십 MB 이하) |
 > | 디스크 | 캐시는 `~/.cache/film/` 아래, 총 1GB 초과 시 오래된 소스부터 삭제 |
 
 ## 7. 아키텍처
@@ -192,6 +192,7 @@ film/
       ffmpeg.ts                                  # Ffmpeg 서비스
       jobs.ts                                    # Jobs 서비스
       library.ts                                 # Library 서비스
+      frames.ts                                # 원본 프레임 추출·검증, Content-Disposition
       cache.ts                                   # Cache 서비스
     lib/                                         # 클라이언트·서버 공용 (순수 TS, Effect 미사용)
       timecode.ts                                # 타임코드 표기, 저장 파일명 생성
@@ -213,6 +214,7 @@ film/
     ffmpeg.test.ts
     jobs.test.ts
     library.test.ts
+    frames.test.ts
     timecode.test.ts
 ```
 
@@ -250,16 +252,16 @@ film/
 
 **요구사항 → Effect 대응**
 
-| 요구사항                         | 구현                                                                                                                                                                                                             |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ffmpeg 프로세스 수명 (F3-5, 9절) | `effect/process`의 `ChildProcessSpawner.spawn`을 `Effect.scoped` 안에서 실행. 스코프가 닫히면(인터럽트 포함) **프로세스가 kill됨** — M0 테스트로 확인                                                            |
-| 30초 타임아웃                    | `Effect.timeout` 계열 → `FfmpegTimeout` 에러. 시간 초과도 인터럽트이므로 위 경로로 kill — M0 테스트로 확인                                                                                                       |
-| 동시성 제한 (F3-3)               | `Effect.forEach(times, extract, { concurrency: n })`                                                                                                                                                             |
-| 이전 작업 취소 (F3-5)            | `FiberHandle` 하나에 작업을 넣는다. 새 작업을 넣으면 이전 Fiber가 자동으로 인터럽트됨                                                                                                                            |
-| 클라이언트 연결 끊김             | `runRouteEffect(effect, request)`가 `request.signal`을 넘김 → abort 시 인터럽트                                                                                                                                  |
-| SSE + 늦은 구독자 재전송         | 작업별 발행 기록(`Ref`) + `PubSub`. 구독 시 기록을 먼저 내보내고 이후 이벤트를 이어 붙인 `Stream`을 `ReadableStream`으로 변환. 발행과 구독 시작은 `Semaphore(1)`로 묶어 누락·중복이 없게 한다 (M2 테스트로 확인) |
-| 캐시 정리 (10절)                 | `Effect.repeat(cleanup, Schedule.spaced("1 hour"))`를 런타임 시작 시 백그라운드로 실행                                                                                                                           |
-| 에러 코드 (11절)                 | 코드별 `Schema.TaggedError`. 핸들러 경계에서 HTTP 상태/응답으로 변환 (누락 시 타입 에러)                                                                                                                         |
+| 요구사항                         | 구현                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ffmpeg 프로세스 수명 (F3-5, 9절) | `effect/process`의 `ChildProcessSpawner.spawn`을 `Effect.scoped` 안에서 실행. 스코프가 닫히면(인터럽트 포함) **프로세스가 kill됨** — M0 테스트로 확인                                                                                                                                                                                                       |
+| 30초 타임아웃                    | `Effect.timeout` 계열 → `FfmpegTimeout` 에러. 시간 초과도 인터럽트이므로 위 경로로 kill — M0 테스트로 확인                                                                                                                                                                                                                                                  |
+| 동시성 제한 (F3-3)               | `Effect.forEach(times, extract, { concurrency: n })`                                                                                                                                                                                                                                                                                                        |
+| 이전 작업 취소 (F3-5)            | `FiberHandle` 하나에 작업을 넣는다. 새 작업을 넣으면 이전 Fiber가 자동으로 인터럽트됨                                                                                                                                                                                                                                                                       |
+| 클라이언트 연결 끊김             | `runRouteEffect(effect, request)`가 `request.signal`을 넘김 → abort 시 인터럽트                                                                                                                                                                                                                                                                             |
+| SSE + 늦은 구독자 재전송         | 작업별 발행 기록(`Ref`) + `PubSub`. 구독 시 기록을 먼저 내보내고 이후 이벤트를 이어 붙인 `Stream`을 `ReadableStream`으로 변환. 발행과 구독 시작은 `Semaphore(1)`로 묶어 누락·중복이 없게 한다 (M2 테스트로 확인). PubSub은 작업이 취소·실패할 때만 닫는다 — 정상 종료 때 닫으면 느린 구독자가 아직 꺼내지 않은 `done`이 버려진다 (M4에서 발견, 테스트 추가) |
+| 캐시 정리 (10절)                 | `Effect.repeat(cleanup, Schedule.spaced("1 hour"))`를 런타임 시작 시 백그라운드로 실행                                                                                                                                                                                                                                                                      |
+| 에러 코드 (11절)                 | 코드별 `Schema.TaggedError`. 핸들러 경계에서 HTTP 상태/응답으로 변환 (누락 시 타입 에러)                                                                                                                                                                                                                                                                    |
 
 **TanStack Start 연결 (`src/server/runtime.ts`)**
 
@@ -386,7 +388,9 @@ film/
 - `$t` — 시점(초). `$filename`의 확장자로 포맷 결정 (`.png | .jpg | .webp`).
 - `$filename`은 표시용. 서버는 확장자만 읽고, 이름 부분은 `Content-Disposition`에 그대로 반영한다.
 - 항상 원본 해상도. 응답은 `Content-Disposition: inline; filename*=UTF-8''...`
-- 응답은 ffmpeg stdout을 `ReadableStream`으로 그대로 스트리밍. `request.signal` abort 시 프로세스 kill.
+- 응답은 ffmpeg 출력을 **다 받은 뒤** 보낸다 (M4에서 스트리밍 대신 선택). 헤더(200)를 보낸 뒤 ffmpeg가 실패하면 깨진 이미지가 되기 때문 — 실패는 상태 코드로 알린다. `request.signal` abort 시 인터럽트되어 프로세스 kill.
+- 검증: 확장자가 `Ffmpeg.formats`에 있어야 하고, `t < duration` (probe 결과는 캐시의 `meta.json`), 파일명에 경로 구분자 없음. 어기면 `400 INVALID_PARAM`.
+- `Content-Disposition`에는 ASCII 대체 이름(`filename=`)과 UTF-8 이름(`filename*=`)을 함께 넣는다.
 - 같은 URL은 결과가 같으므로 `Cache-Control: max-age=31536000, immutable` (포맷 왕복 시 브라우저 캐시 재사용).
 
 ### 8-3. 검증 규칙 (`src/server/schema.ts`, Effect Schema)
@@ -418,13 +422,14 @@ ffmpeg -v error -ss <t> -i <path> -frames:v 1 -vf scale=320:-2 -q:v 4 -y <cache>
 - `-ss`를 `-i` 앞에 둔다(빠른 seek + 정확한 위치).
 - 임시 파일에 쓴 뒤 `rename`으로 원자적 교체(동시 요청 시 깨진 파일 방지).
 
-**원본 프레임 (스트리밍)**
+**원본 프레임**
 
 ```bash
 ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -c:v <png | mjpeg -q:v 2 | libwebp -quality 90> pipe:1
 ```
 
 - 클라이언트 연결이 끊기면 프로세스 kill.
+- `-ss t`는 t 이후 첫 프레임을 가져온다 (예: 30fps에서 2.818 → 2.833초 프레임). 썸네일도 같은 방식이라 썸네일과 원본 프레임은 같은 장면이다.
 
 **M1 확인 사항**
 
@@ -486,7 +491,7 @@ Vitest + `@effect/vitest` 사용. `src/server/*`는 TanStack과 무관한 Effect
 | **M1** ✅ | `Ffmpeg`·`Library`·`AppConfig` 서비스 + 테스트                                                                                                                                     |
 | **M2** ✅ | 서버 함수 `listVideos`, `openSource`, 썸네일 작업(`jobs.ts`) + SSE 라우트                                                                                                          |
 | **M3** ✅ | 화면: 영상 목록(F1), 썸네일 그리드                                                                                                                                                 |
-| **M4**    | 원본 해상도 미리보기 + [다른 이름으로 저장] 파일명·포맷 확인 (F4, F5) → **MVP 완료**                                                                                               |
+| **M4** ✅ | 원본 해상도 미리보기 + [다른 이름으로 저장] 파일명·포맷 확인 (F4, F5) → **MVP 완료**                                                                                               |
 | M5        | 구간 재생성, 프레임 미세 조정, 최근 파일, 실패한 썸네일 재시도                                                                                                                     |
 | M6        | 장면 기반 모드                                                                                                                                                                     |
 

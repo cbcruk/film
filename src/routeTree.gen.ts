@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiSourcesIdEventsRouteImport } from './routes/api/sources.$id.events'
 import { Route as ApiSourcesIdThumbRouteImport } from './routes/api/sources.$id.thumb'
+import { Route as ApiSourcesIdFrameTFilenameRouteImport } from './routes/api/sources.$id.frame.$t.$filename'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -28,35 +29,58 @@ const ApiSourcesIdThumbRoute = ApiSourcesIdThumbRouteImport.update({
   path: '/api/sources/$id/thumb',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSourcesIdFrameTFilenameRoute =
+  ApiSourcesIdFrameTFilenameRouteImport.update({
+    id: '/api/sources/$id/frame/$t/$filename',
+    path: '/api/sources/$id/frame/$t/$filename',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/sources/$id/events': typeof ApiSourcesIdEventsRoute
   '/api/sources/$id/thumb': typeof ApiSourcesIdThumbRoute
+  '/api/sources/$id/frame/$t/$filename': typeof ApiSourcesIdFrameTFilenameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/sources/$id/events': typeof ApiSourcesIdEventsRoute
   '/api/sources/$id/thumb': typeof ApiSourcesIdThumbRoute
+  '/api/sources/$id/frame/$t/$filename': typeof ApiSourcesIdFrameTFilenameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/sources/$id/events': typeof ApiSourcesIdEventsRoute
   '/api/sources/$id/thumb': typeof ApiSourcesIdThumbRoute
+  '/api/sources/$id/frame/$t/$filename': typeof ApiSourcesIdFrameTFilenameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/sources/$id/events' | '/api/sources/$id/thumb'
+  fullPaths:
+    | '/'
+    | '/api/sources/$id/events'
+    | '/api/sources/$id/thumb'
+    | '/api/sources/$id/frame/$t/$filename'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/sources/$id/events' | '/api/sources/$id/thumb'
-  id: '__root__' | '/' | '/api/sources/$id/events' | '/api/sources/$id/thumb'
+  to:
+    | '/'
+    | '/api/sources/$id/events'
+    | '/api/sources/$id/thumb'
+    | '/api/sources/$id/frame/$t/$filename'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/sources/$id/events'
+    | '/api/sources/$id/thumb'
+    | '/api/sources/$id/frame/$t/$filename'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiSourcesIdEventsRoute: typeof ApiSourcesIdEventsRoute
   ApiSourcesIdThumbRoute: typeof ApiSourcesIdThumbRoute
+  ApiSourcesIdFrameTFilenameRoute: typeof ApiSourcesIdFrameTFilenameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +106,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSourcesIdThumbRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/sources/$id/frame/$t/$filename': {
+      id: '/api/sources/$id/frame/$t/$filename'
+      path: '/api/sources/$id/frame/$t/$filename'
+      fullPath: '/api/sources/$id/frame/$t/$filename'
+      preLoaderRoute: typeof ApiSourcesIdFrameTFilenameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +120,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiSourcesIdEventsRoute: ApiSourcesIdEventsRoute,
   ApiSourcesIdThumbRoute: ApiSourcesIdThumbRoute,
+  ApiSourcesIdFrameTFilenameRoute: ApiSourcesIdFrameTFilenameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

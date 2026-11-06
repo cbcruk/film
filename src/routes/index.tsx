@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { FramePreview, useFrameFormat } from '../components/FramePreview.tsx'
 import { ThumbnailGrid } from '../components/ThumbnailGrid.tsx'
 import { VideoList } from '../components/VideoList.tsx'
 import { getHealth } from '../functions/health.ts'
@@ -7,7 +8,12 @@ import { listVideos, openSource } from '../functions/sources.ts'
 import { useSourceEvents } from '../hooks/useSourceEvents.ts'
 import { ServerError } from '../lib/server-error.ts'
 import { formatTimecode } from '../lib/timecode.ts'
-import type { ErrorBody, SourceInfo, ThumbCount } from '../lib/types.ts'
+import type {
+  ErrorBody,
+  FrameFormat,
+  SourceInfo,
+  ThumbCount,
+} from '../lib/types.ts'
 
 const COUNTS: ReadonlyArray<ThumbCount> = [6, 12, 24, 48]
 
@@ -102,6 +108,7 @@ function HomePage() {
             key={`${search.v}-${search.n}`}
             id={search.v}
             count={search.n}
+            formats={health.formats}
             onCount={(n) => navigate({ search: (s) => ({ ...s, n }) })}
             onMissing={refresh}
           />
@@ -119,6 +126,7 @@ type OpenState =
 function SourcePanel(props: {
   readonly id: string
   readonly count: ThumbCount
+  readonly formats: ReadonlyArray<FrameFormat>
   readonly onCount: (n: ThumbCount) => void
   /** 파일이 사라졌을 때 목록을 다시 읽는다 */
   readonly onMissing: () => void
@@ -164,6 +172,7 @@ function SourcePanel(props: {
   return (
     <SourceView
       info={state.info}
+      formats={props.formats}
       onCount={props.onCount}
       onLost={() => attempt === 0 && setAttempt(1)}
     />
@@ -172,12 +181,16 @@ function SourcePanel(props: {
 
 function SourceView(props: {
   readonly info: SourceInfo
+  readonly formats: ReadonlyArray<FrameFormat>
   readonly onCount: (n: ThumbCount) => void
   readonly onLost: () => void
 }) {
   const { info } = props
   const events = useSourceEvents(info.id, info.setId, info.times.length)
   const [selected, setSelected] = useState<number | undefined>(undefined)
+  const [format, setFormat] = useFrameFormat(props.formats)
+  const selectedThumb =
+    selected === undefined ? undefined : events.thumbs[selected]
 
   useEffect(() => {
     if (events.lost) props.onLost()
@@ -215,6 +228,19 @@ function SourceView(props: {
           {events.finished ? '완료' : `${events.done}/${events.total}`}
         </span>
       </header>
+
+      {selected !== undefined && (
+        <FramePreview
+          info={info}
+          t={info.times[selected]!}
+          placeholder={
+            selectedThumb?.status === 'ready' ? selectedThumb.url : undefined
+          }
+          format={format}
+          formats={props.formats}
+          onFormat={setFormat}
+        />
+      )}
 
       <ThumbnailGrid
         times={info.times}

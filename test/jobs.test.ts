@@ -109,6 +109,34 @@ describe('Jobs', () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.live('진행 중인 구독자는 모두 done까지 받는다 (작업 종료와 경쟁)', () => {
+    const { layer } = setup(makeDirs(), { delay: '1 millis' })
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      for (let round = 0; round < 5; round++) {
+        yield* jobs.open({ id: a, count: round % 2 === 0 ? 24 : 48 })
+        // 느리게 읽는 구독자 (브라우저 연결처럼 소비가 발행보다 늦는 경우)
+        const slow = Effect.gen(function* () {
+          const stream = yield* jobs.events(a)
+          return Array.from(
+            yield* Stream.runCollect(
+              stream.pipe(Stream.tap(() => Effect.sleep('2 millis'))),
+            ),
+          )
+        })
+        const all = yield* Effect.all(
+          Array.from({ length: 20 }, (_, i) =>
+            Effect.sleep(`${i} millis`).pipe(Effect.andThen(slow)),
+          ),
+          { concurrency: 'unbounded' },
+        )
+        for (const events of all)
+          assert.strictEqual(events.at(-1)?.type, 'done')
+      }
+    }).pipe(Effect.provide(layer))
+  })
+
   it.live('새 소스를 열면 이전 작업은 인터럽트된다', () => {
     const { layer, stats } = setup(makeDirs(), { hang: true })
     return Effect.gen(function* () {

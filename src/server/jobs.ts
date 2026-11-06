@@ -3,6 +3,7 @@ import path from 'node:path'
 import {
   Context,
   Effect,
+  Exit,
   FiberHandle,
   Layer,
   Option,
@@ -119,8 +120,14 @@ export class Jobs extends Context.Service<
           )
           yield* publish(job, { type: 'done', setId })
         }).pipe(
-          // 끝나거나 취소되면 구독 스트림도 끝낸다
-          Effect.ensuring(job.lock.withPermit(PubSub.shutdown(job.pubsub))),
+          // 취소·실패 시에만 PubSub을 닫아 구독 스트림을 끝낸다.
+          // 정상 종료 때 닫으면 구독자가 아직 꺼내지 않은 `done`이 버려진다 (M4에서 발견)
+          // — 그때는 구독자가 `done`을 받고 스스로 끝난다
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : job.lock.withPermit(PubSub.shutdown(job.pubsub)),
+          ),
           Effect.withSpan('Jobs.generate'),
         )
 
@@ -194,8 +201,11 @@ export class Jobs extends Context.Service<
           job.lock.withPermit(
             Effect.gen(function* () {
               const past = yield* Ref.get(job.history)
-              // 이미 끝났거나 취소된 작업이면 기록만 보낸다
-              if (yield* PubSub.isShutdown(job.pubsub)) {
+              // 이미 끝났거나(done 기록 있음) 취소된 작업이면 기록만 보낸다
+              if (
+                past.some((e) => e.type === 'done') ||
+                (yield* PubSub.isShutdown(job.pubsub))
+              ) {
                 return Stream.fromIterable(past)
               }
               const subscription = yield* PubSub.subscribe(job.pubsub)
