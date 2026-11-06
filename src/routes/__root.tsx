@@ -5,6 +5,7 @@ import {
   Scripts,
   createRootRoute,
 } from '@tanstack/react-router'
+import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -13,8 +14,10 @@ export const Route = createRootRoute({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'film — 썸네일 선택기' },
     ],
+    links: [{ rel: 'stylesheet', href: appCss }],
   }),
   component: RootComponent,
+  notFoundComponent: () => <p className="notice">페이지를 찾을 수 없습니다</p>,
 })
 
 function RootComponent() {

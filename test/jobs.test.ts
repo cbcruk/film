@@ -181,6 +181,21 @@ describe('Jobs', () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.live('같은 소스를 동시에 열어도 작업은 하나다', () => {
+    const { layer, stats } = setup(makeDirs())
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      const [x, y] = yield* Effect.all(
+        [jobs.open({ id: a, count: 6 }), jobs.open({ id: a, count: 6 })],
+        { concurrency: 'unbounded' },
+      )
+      assert.strictEqual(x.setId, y.setId)
+      yield* collectEvents(a)
+      assert.strictEqual(stats.calls, 6)
+    }).pipe(Effect.provide(layer))
+  })
+
   it.live('모르는 ID는 FileNotFound', () => {
     const { layer } = setup(makeDirs())
     return Effect.gen(function* () {

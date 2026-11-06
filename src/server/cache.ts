@@ -80,7 +80,8 @@ export class Cache extends Context.Service<
       const writeMeta = (id: string, value: CachedMeta) =>
         Effect.gen(function* () {
           yield* prepare(id)
-          const tmp = `${metaOf(id)}.${process.pid}.tmp`
+          // 동시에 써도 겹치지 않도록 임시 파일 이름을 매번 다르게
+          const tmp = `${metaOf(id)}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`
           yield* fs.writeFileString(tmp, JSON.stringify(value))
           yield* fs.rename(tmp, metaOf(id))
         }).pipe(Effect.orDie)

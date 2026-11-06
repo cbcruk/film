@@ -63,6 +63,8 @@ export class Jobs extends Context.Service<
       const nextSet = yield* Ref.make(1)
       // 새 작업을 넣으면 이전 작업 Fiber를 인터럽트한다 (→ ffmpeg kill)
       const running = yield* FiberHandle.make<void, never>()
+      // open은 한 번에 하나씩 (같은 소스를 동시에 열어도 작업이 하나만 생기도록)
+      const opening = yield* Semaphore.make(1)
 
       const publish = (job: Job, event: SourceEvent) =>
         job.lock.withPermit(
@@ -133,7 +135,7 @@ export class Jobs extends Context.Service<
         return meta
       })
 
-      const open = Effect.fn('Jobs.open')(function* (input: {
+      const openUnsafe = Effect.fn('Jobs.open')(function* (input: {
         readonly id: string
         readonly count: ThumbCount
       }) {
@@ -168,6 +170,11 @@ export class Jobs extends Context.Service<
         yield* FiberHandle.run(running, generate(job))
         return job.info
       })
+
+      const open = (input: {
+        readonly id: string
+        readonly count: ThumbCount
+      }) => opening.withPermit(openUnsafe(input))
 
       const events = (id: string) =>
         Ref.get(current).pipe(

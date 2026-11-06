@@ -288,7 +288,11 @@ film/
 - **서버 전용 코드 분리**: `src/server/*` 파일 맨 위에 `import '@tanstack/react-start/server-only'`를 둔다 (클라이언트에서 import하면 빌드 에러). 서버 함수 `handler`·`validator`와 서버 라우트 `handlers` 안에서만 사용한다.
   - M0 확인: 서버 함수에 Effect Schema 검증기를 붙여도 클라이언트 번들에 `effect`가 포함되지 않는다 (RPC 스텁만 남음).
 - **환경변수**: `.env`는 Vite가 아니라 `AppConfig`(Effect `ConfigProvider.fromDotEnv`)가 읽는다. 실행 위치(프로젝트 루트) 기준 `.env`. 환경변수가 있으면 그쪽이 우선.
-- **CSRF**: 서버 함수 RPC는 같은 출처(Origin) 요청만 허용된다 (TanStack 기본 동작, M0 확인). 외부에서 직접 호출할 일은 없다.
+- **CSRF**: `src/start.ts`에 `createCsrfMiddleware`를 서버 함수 전용으로 등록했다 (TanStack이 dev 서버에서 미등록 경고를 냄, M3). 같은 출처는 200, 다른 출처·헤더 없음은 403 확인.
+- **화면 상태**: 선택한 영상과 썸네일 개수는 URL 검색 파라미터(`?v={id}&n=12`)에 둔다. 새로고침해도 유지되고, 서버는 같은 세트를 돌려준다.
+- **StrictMode**: dev에서는 effect가 두 번 실행되어 `openSource`가 동시에 두 번 호출된다. `Jobs.open`은 `Semaphore(1)`로 한 번에 하나씩 처리해 같은 세트를 돌려준다 (M3에서 발견한 경쟁 상태, 테스트 추가).
+- **키보드**: ←/→는 `window`에서 받는다 (Safari는 버튼을 클릭해도 포커스를 주지 않음). 입력창·선택 상자에서는 무시.
+- **화면 확인**: 설치된 Chrome을 헤드리스로 띄워 DevTools 프로토콜로 확인한다 (로드 후 대기 → 스크린샷, 키 입력, 네트워크·SSE 기록).
 - **Effect 버전**: v4는 v3와 모듈 구성·API 이름이 다르다. 설치된 패키지의 타입 정의와 `node_modules/effect/CLAUDE.md`·`ai-docs`를 기준으로 작성한다. TanStack도 `node_modules/@tanstack/*/skills`의 문서를 기준으로 한다 (예: 검증기 메서드는 `inputValidator`가 아니라 `validator`).
 - **ffmpeg 확인**: `Ffmpeg.checkInstalled`로 확인하고, 실패하면 화면에 안내를 표시한다 (M0 화면에서 사용 중).
 
@@ -450,8 +454,8 @@ ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -c:v <png | mjpeg -q
 | `LIBRARY_NOT_FOUND` | `LibraryNotFound`     | 503  | `FILM_DIR`이 없거나 폴더가 아님              | "영상 폴더를 찾을 수 없습니다. `.env`의 `FILM_DIR`을 확인하세요" |
 | `FILE_NOT_FOUND`    | `FileNotFound`        | 404  | 목록 이후 파일이 삭제·이동됨 / 알 수 없는 ID | "파일을 찾을 수 없습니다" + 목록 새로고침                        |
 | `NOT_A_VIDEO`       | `NotAVideo`           | 415  | 비디오 스트림 없음 / probe 실패              | "지원하지 않는 파일입니다"                                       |
-| `EXTRACT_FAILED`    | `ExtractFailed`       | 500  | 특정 시점 추출 실패                          | 해당 카드에 ⚠ + 재시도 버튼                                      |
-| `TIMEOUT`           | `FfmpegTimeout`       | 504  | ffmpeg 30초 초과                             | 해당 카드에 ⚠ + 재시도 버튼                                      |
+| `EXTRACT_FAILED`    | `ExtractFailed`       | 500  | 특정 시점 추출 실패                          | 해당 카드에 ⚠ (재시도 버튼은 M5)                                 |
+| `TIMEOUT`           | `FfmpegTimeout`       | 504  | ffmpeg 30초 초과                             | 해당 카드에 ⚠ (재시도 버튼은 M5)                                 |
 | `INVALID_PARAM`     | `ParseError` (Schema) | 400  | 검증 실패                                    | 개발자 오류 — 콘솔 로그                                          |
 
 - 에러 코드 유니온(`ErrorCode`)은 `src/lib/types.ts`에 두어 화면도 같은 코드를 쓴다.
@@ -481,9 +485,9 @@ Vitest + `@effect/vitest` 사용. `src/server/*`는 TanStack과 무관한 Effect
 | **M0** ✅ | TanStack Start 프로젝트 생성, `127.0.0.1:3000` 실행, Vitest·`@effect/vitest`·Prettier 설정, `.env` 로딩. `runtime.ts`·`errors.ts` 골격, 환경 확인 화면. 확인 결과는 7-1·7-2에 반영 |
 | **M1** ✅ | `Ffmpeg`·`Library`·`AppConfig` 서비스 + 테스트                                                                                                                                     |
 | **M2** ✅ | 서버 함수 `listVideos`, `openSource`, 썸네일 작업(`jobs.ts`) + SSE 라우트                                                                                                          |
-| **M3**    | 화면: 영상 목록(F1), 썸네일 그리드                                                                                                                                                 |
+| **M3** ✅ | 화면: 영상 목록(F1), 썸네일 그리드                                                                                                                                                 |
 | **M4**    | 원본 해상도 미리보기 + [다른 이름으로 저장] 파일명·포맷 확인 (F4, F5) → **MVP 완료**                                                                                               |
-| M5        | 구간 재생성, 프레임 미세 조정, 최근 파일                                                                                                                                           |
+| M5        | 구간 재생성, 프레임 미세 조정, 최근 파일, 실패한 썸네일 재시도                                                                                                                     |
 | M6        | 장면 기반 모드                                                                                                                                                                     |
 
 ## 14. 열린 질문
