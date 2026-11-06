@@ -5,7 +5,10 @@ import { isTextEntry } from '../lib/keyboard.ts'
 import { eventsUrl } from '../lib/timecode.ts'
 import type { SourceEvent as ServerEvent } from '../lib/types.ts'
 import { sourceActors, sourceMachine, toErrorBody } from './source.ts'
-import type { SourceEvent } from './source.ts'
+import type { SourceEvent, ThumbState } from './source.ts'
+
+/** SSE 이벤트를 모아 보내는 간격 */
+const FLUSH_MS = 100
 
 export const liveSourceMachine = sourceMachine.provide({
   actions: {
@@ -84,35 +87,61 @@ export const liveSourceMachine = sourceMachine.provide({
             if (event.setId === input.setId) handle(event)
           })
 
-        on('thumb', (e) =>
-          sendBack({
-            type: 'THUMB',
+        // 칸마다 이벤트를 보내면 칸이 많을 때(1초 간격·긴 영상) 화면이 매번 다시 그려져 멈춘다.
+        // FLUSH_MS 동안 모아 RECEIVED 한 번으로 보낸다
+        let pending: Array<{ index: number; thumb: ThumbState }> = []
+        let done = 0
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const flush = () => {
+          clearTimeout(timer)
+          timer = undefined
+          if (pending.length === 0 && done === 0) return
+          sendBack({ type: 'RECEIVED', thumbs: pending, done })
+          pending = []
+          done = 0
+        }
+        const later = () => {
+          timer ??= setTimeout(flush, FLUSH_MS)
+        }
+
+        on('thumb', (e) => {
+          pending.push({
             index: e.index,
             thumb: { status: 'ready', url: e.url },
-          }),
-        )
+          })
+          later()
+        })
         on('error', (e) => {
           if (e.index === undefined) return
-          sendBack({
-            type: 'THUMB',
+          pending.push({
             index: e.index,
             thumb: { status: 'error', code: e.code, message: e.message },
           })
+          later()
         })
-        on('progress', (e) => sendBack({ type: 'PROGRESS', done: e.done }))
+        on('progress', (e) => {
+          done = Math.max(done, e.done)
+          later()
+        })
         on('done', () => {
           finished = true
           source.close() // 닫지 않으면 EventSource가 자동 재연결한다
+          flush()
           sendBack({ type: 'DONE' })
         })
         source.addEventListener('error', (e) => {
           if (e instanceof MessageEvent) return
           // 일시적 끊김은 브라우저가 재연결한다. CLOSED면 서버가 거부한 것 (404 등)
-          if (!finished && source.readyState === EventSource.CLOSED)
+          if (!finished && source.readyState === EventSource.CLOSED) {
+            flush()
             sendBack({ type: 'LOST' })
+          }
         })
 
-        return () => source.close()
+        return () => {
+          clearTimeout(timer)
+          source.close()
+        }
       },
     ),
 

@@ -1,3 +1,4 @@
+import { memo, useCallback, useRef } from 'react'
 import { AspectRatio } from '@astryxdesign/core/AspectRatio'
 import { Button } from '@astryxdesign/core/Button'
 import { Center } from '@astryxdesign/core/Center'
@@ -47,55 +48,91 @@ export function ThumbnailGrid({
   onRetry,
   retrying,
 }: Props) {
+  // 카드는 바뀐 칸만 다시 그린다 (memo). 넘기는 함수가 매번 바뀌지 않도록 최신 값을 ref로 부른다
+  const handlers = useRef({ onSelect, onRetry })
+  handlers.current = { onSelect, onRetry }
+  const select = useCallback((i: number) => handlers.current.onSelect(i), [])
+  const retry = useCallback((i: number) => handlers.current.onRetry(i), [])
+
   return (
     <Grid columns={{ minWidth: 200, max: 12 }} gap={3}>
-      {times.map((t, i) => {
-        const thumb = thumbs[i]
-        const time = formatTimecode(t)
-        return (
-          <SelectableCard
-            key={i}
-            id={`thumb-${i}`}
-            label={`${time} 썸네일`}
-            isSelected={i === selected}
-            onChange={() => onSelect(i)}
-            variant="transparent"
-            padding={1}
-          >
-            <AspectRatio ratio={aspect} fit="cover" style={ROUNDED}>
-              {thumb === undefined ? (
-                <Skeleton index={i % 12} radius="none" />
-              ) : thumb.status === 'ready' ? (
-                <img src={thumb.url} alt="" loading="lazy" draggable={false} />
-              ) : (
-                <Center padding={2}>
-                  <VStack gap={1} align="center">
-                    <Text type="supporting" maxLines={2}>
-                      추출 실패: {thumb.message}
-                    </Text>
-                    <Button
-                      size="sm"
-                      label={retrying.has(i) ? '다시 만드는 중…' : '재시도'}
-                      onClick={() => onRetry(i)}
-                      isLoading={retrying.has(i)}
-                    />
-                  </VStack>
-                </Center>
-              )}
-              {/* 이미지 위 오른쪽 위에 겹친다. 클릭은 아래(카드·재시도 버튼)로 통과 */}
-              <HStack
-                justify="end"
-                align="start"
-                padding={1}
-                style={OVERLAY}
-                data-time={time}
-              >
-                <Token size="sm" label={time} style={ON_IMAGE} />
-              </HStack>
-            </AspectRatio>
-          </SelectableCard>
-        )
-      })}
+      {times.map((t, i) => (
+        <ThumbCard
+          key={i}
+          index={i}
+          t={t}
+          thumb={thumbs[i]}
+          aspect={aspect}
+          isSelected={i === selected}
+          isRetrying={retrying.has(i)}
+          onSelect={select}
+          onRetry={retry}
+        />
+      ))}
     </Grid>
   )
 }
+
+const ThumbCard = memo(function ThumbCard({
+  index: i,
+  t,
+  thumb,
+  aspect,
+  isSelected,
+  isRetrying,
+  onSelect,
+  onRetry,
+}: {
+  readonly index: number
+  readonly t: number
+  readonly thumb: ThumbState | undefined
+  readonly aspect: number
+  readonly isSelected: boolean
+  readonly isRetrying: boolean
+  readonly onSelect: (index: number) => void
+  readonly onRetry: (index: number) => void
+}) {
+  const time = formatTimecode(t)
+  return (
+    <SelectableCard
+      id={`thumb-${i}`}
+      label={`${time} 썸네일`}
+      isSelected={isSelected}
+      onChange={() => onSelect(i)}
+      variant="transparent"
+      padding={1}
+    >
+      <AspectRatio ratio={aspect} fit="cover" style={ROUNDED}>
+        {thumb === undefined ? (
+          <Skeleton index={i % 12} radius="none" />
+        ) : thumb.status === 'ready' ? (
+          <img src={thumb.url} alt="" loading="lazy" draggable={false} />
+        ) : (
+          <Center padding={2}>
+            <VStack gap={1} align="center">
+              <Text type="supporting" maxLines={2}>
+                추출 실패: {thumb.message}
+              </Text>
+              <Button
+                size="sm"
+                label={isRetrying ? '다시 만드는 중…' : '재시도'}
+                onClick={() => onRetry(i)}
+                isLoading={isRetrying}
+              />
+            </VStack>
+          </Center>
+        )}
+        {/* 이미지 위 오른쪽 위에 겹친다. 클릭은 아래(카드·재시도 버튼)로 통과 */}
+        <HStack
+          justify="end"
+          align="start"
+          padding={1}
+          style={OVERLAY}
+          data-time={time}
+        >
+          <Token size="sm" label={time} style={ON_IMAGE} />
+        </HStack>
+      </AspectRatio>
+    </SelectableCard>
+  )
+})

@@ -111,9 +111,12 @@ describe('source 머신', () => {
     expect(actor.getSnapshot().context.format).toBe('png')
     expect(calls.streams).toEqual(['s1'])
 
-    push({ type: 'THUMB', index: 1, thumb: { status: 'ready', url: '/t1' } })
-    push({ type: 'PROGRESS', done: 2 })
-    push({ type: 'PROGRESS', done: 1 }) // 재연결로 다시 온 작은 값은 무시
+    push({
+      type: 'RECEIVED',
+      thumbs: [{ index: 1, thumb: { status: 'ready', url: '/t1' } }],
+      done: 2,
+    })
+    push({ type: 'RECEIVED', thumbs: [], done: 1 }) // 재연결로 다시 온 작은 값은 무시
     push({ type: 'DONE' })
     const s = actor.getSnapshot()
     expect(s.context.thumbs[1]).toEqual({ status: 'ready', url: '/t1' })

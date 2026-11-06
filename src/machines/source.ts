@@ -75,8 +75,13 @@ export interface SourceContext extends SourceInput {
 
 /** SSE에서 오는 일 */
 export type StreamEvent =
-  | { type: 'THUMB'; index: number; thumb: ThumbState }
-  | { type: 'PROGRESS'; done: number }
+  /** 받은 썸네일 묶음 (SSE 이벤트를 짧은 간격으로 모아 한 번에 — 칸이 수천 개여도 화면이 버티도록) */
+  | {
+      type: 'RECEIVED'
+      thumbs: ReadonlyArray<{ index: number; thumb: ThumbState }>
+      /** 묶음 안의 가장 큰 진행 수 (없으면 0) */
+      done: number
+    }
   | { type: 'DONE' }
   | { type: 'LOST' }
 
@@ -121,6 +126,18 @@ const withThumb = (
   index: number,
   thumb: ThumbState,
 ) => thumbs.map((t, i) => (i === index ? thumb : t))
+
+/** 여러 칸을 한 번의 복사로 */
+const withThumbs = (
+  thumbs: ReadonlyArray<ThumbState | undefined>,
+  updates: ReadonlyArray<{ index: number; thumb: ThumbState }>,
+) => {
+  if (updates.length === 0) return thumbs
+  const next = [...thumbs]
+  for (const { index, thumb } of updates)
+    if (index >= 0 && index < next.length) next[index] = thumb
+  return next
+}
 
 const without = (set: ReadonlySet<number>, index: number) => {
   const next = new Set(set)
@@ -314,15 +331,11 @@ export const sourceMachine = setup({
             offset: ({ context, event }) => context.offset + event.seconds,
           }),
         },
-        THUMB: {
+        RECEIVED: {
           actions: assign({
             thumbs: ({ context, event }) =>
-              withThumb(context.thumbs, event.index, event.thumb),
-          }),
-        },
-        // 재연결 시 같은 진행률이 다시 오므로 큰 값만 반영
-        PROGRESS: {
-          actions: assign({
+              withThumbs(context.thumbs, event.thumbs),
+            // 재연결 시 같은 진행률이 다시 오므로 큰 값만 반영
             done: ({ context, event }) => Math.max(context.done, event.done),
           }),
         },
