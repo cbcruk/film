@@ -1,12 +1,7 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { useMachine } from '@xstate/react'
+import { fromPromise } from 'xstate'
 import { Banner } from '@astryxdesign/core/Banner'
 import { Button } from '@astryxdesign/core/Button'
 import { Center } from '@astryxdesign/core/Center'
@@ -33,35 +28,27 @@ import { Selector } from '@astryxdesign/core/Selector'
 import { Spinner } from '@astryxdesign/core/Spinner'
 import { Text } from '@astryxdesign/core/Text'
 import { VStack } from '@astryxdesign/core/VStack'
-import { FramePreview, useFrameFormat } from '../components/FramePreview.tsx'
+import { FramePreview } from '../components/FramePreview.tsx'
 import { ThumbnailGrid } from '../components/ThumbnailGrid.tsx'
 import { VideoTable } from '../components/VideoTable.tsx'
 import { getHealth } from '../functions/health.ts'
-import {
-  createSet,
-  listVideos,
-  openSource,
-  retryThumb,
-} from '../functions/sources.ts'
+import { listVideos } from '../functions/sources.ts'
 import { useElementWidth } from '../hooks/useElementWidth.ts'
-import { useRecent } from '../hooks/useRecent.ts'
-import { useSourceEvents } from '../hooks/useSourceEvents.ts'
 import { isTextEntry } from '../lib/keyboard.ts'
-import { ServerError } from '../lib/server-error.ts'
 import { formatTimecode } from '../lib/timecode.ts'
-import type {
-  ErrorBody,
-  FrameFormat,
-  SourceInfo,
-  ThumbCount,
-  ThumbInterval,
-  ThumbMode,
-} from '../lib/types.ts'
+import type { FrameFormat, ThumbInterval, ThumbMode } from '../lib/types.ts'
+import {
+  cachedVideos,
+  libraryMachine,
+  recentVideos,
+  visibleVideos,
+} from '../machines/library.ts'
+import type { Tab as LibraryTab } from '../machines/library.ts'
+import { liveSourceMachine } from '../machines/source.live.ts'
+import { toErrorBody } from '../machines/source.ts'
+import type { SourceContext, SourceEvent } from '../machines/source.ts'
 
 const INTERVALS: ReadonlyArray<ThumbInterval> = [1, 2, 5, 10, 30]
-
-/** [이 구간 더 보기]로 나누는 장수 */
-const RANGE_COUNT: ThumbCount = 12
 
 interface Search {
   /** 선택한 영상 ID */
@@ -71,11 +58,6 @@ interface Search {
   /** 장면 모드 (없으면 균등 분할) */
   readonly m?: 'scene'
 }
-
-const toErrorBody = (error: unknown): ErrorBody =>
-  error instanceof ServerError
-    ? { code: error.code, message: error.message }
-    : { code: 'INTERNAL', message: String(error) }
 
 export const Route = createFileRoute('/')({
   validateSearch: (search: Record<string, unknown>): Search => {
@@ -110,17 +92,20 @@ const PANE_MIN_WIDTH = 480
 /** 썸네일 창이 처음 차지하는 몫 — 이 앱의 주 작업 공간이다 */
 const PANE_DEFAULT_SHARE = 2 / 3
 
-type Tab = 'all' | 'recent' | 'cached'
-
 function HomePage() {
   const { health, list } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
-  const [refreshing, setRefreshing] = useState(false)
-  const [recent, addRecent] = useRecent()
-  const [tab, setTab] = useState<Tab>('all')
-  const [query, setQuery] = useState('')
+  // 탭·검색·정렬·최근·새로고침 (machines/library.ts)
+  const [library, sendLibrary] = useMachine(
+    libraryMachine.provide({
+      actors: { refresh: fromPromise(() => router.invalidate()) },
+    }),
+  )
+  const { tab, query } = library.context
+  const refreshing = library.matches('refreshing')
+  const refresh = () => sendLibrary({ type: 'REFRESH' })
 
   const [surfaceRef, surfaceWidth] = useElementWidth<HTMLDivElement>()
   const [listRef, listWidth] = useElementWidth<HTMLDivElement>()
@@ -150,20 +135,10 @@ function HomePage() {
   }, [isMeasured, surfaceWidth, resizePane])
 
   const videos = list.ok ? list.value.videos : []
-  const recentVideos = useMemo(() => {
-    const byId = new Map(videos.map((v) => [v.id, v]))
-    return recent.flatMap((id) => byId.get(id) ?? [])
-  }, [videos, recent])
-  const cachedVideos = useMemo(() => videos.filter((v) => v.cached), [videos])
-
-  const visible = useMemo(() => {
-    const inTab =
-      tab === 'recent' ? recentVideos : tab === 'cached' ? cachedVideos : videos
-    const q = query.trim().toLowerCase()
-    return q === ''
-      ? inTab
-      : inTab.filter((v) => v.name.toLowerCase().includes(q))
-  }, [tab, videos, recentVideos, cachedVideos, query])
+  const visible = useMemo(
+    () => visibleVideos(library.context, videos),
+    [library.context, videos],
+  )
 
   const openVideo = useCallback(
     (v: string) => navigate({ search: (s) => ({ ...s, v }) }),
@@ -181,15 +156,6 @@ function HomePage() {
         />
       </Center>
     )
-  }
-
-  const refresh = async () => {
-    setRefreshing(true)
-    try {
-      await router.invalidate()
-    } finally {
-      setRefreshing(false)
-    }
   }
 
   const isPaneFullWidth = isSingleSurface && search.v !== undefined
@@ -212,15 +178,27 @@ function HomePage() {
           })
         }
         onMissing={refresh}
-        onOpened={addRecent}
+        onOpened={(id) => sendLibrary({ type: 'OPENED', id })}
         onClose={closeVideo}
       />
     )
 
-  const tabs: ReadonlyArray<{ value: Tab; label: string; count: number }> = [
+  const tabs: ReadonlyArray<{
+    value: LibraryTab
+    label: string
+    count: number
+  }> = [
     { value: 'all', label: '전체', count: videos.length },
-    { value: 'recent', label: '최근', count: recentVideos.length },
-    { value: 'cached', label: '썸네일 있음', count: cachedVideos.length },
+    {
+      value: 'recent',
+      label: '최근',
+      count: recentVideos(library.context, videos).length,
+    },
+    {
+      value: 'cached',
+      label: '썸네일 있음',
+      count: cachedVideos(videos).length,
+    },
   ]
 
   return (
@@ -248,7 +226,7 @@ function HomePage() {
                   isLabelHidden
                   placeholder="파일명 검색"
                   value={query}
-                  onChange={setQuery}
+                  onChange={(q) => sendLibrary({ type: 'SEARCH', query: q })}
                   hasClear
                   width={240}
                 />
@@ -263,7 +241,9 @@ function HomePage() {
                 <TabList
                   hasDivider
                   value={tab}
-                  onChange={(value) => setTab(value as Tab)}
+                  onChange={(value) =>
+                    sendLibrary({ type: 'TAB', tab: value as LibraryTab })
+                  }
                 >
                   {tabs.map((t) => (
                     <Tab
@@ -325,7 +305,10 @@ function HomePage() {
                 }
                 actions={
                   tab === 'all' ? undefined : (
-                    <Button label="전체 보기" onClick={() => setTab('all')} />
+                    <Button
+                      label="전체 보기"
+                      onClick={() => sendLibrary({ type: 'TAB', tab: 'all' })}
+                    />
                   )
                 }
               />
@@ -336,6 +319,8 @@ function HomePage() {
               openId={search.v}
               onOpen={openVideo}
               isStacked={isStacked}
+              sort={library.context.sort}
+              onSort={(sort) => sendLibrary({ type: 'SORT', sort })}
             />
           )}
         </LayoutContent>
@@ -366,11 +351,7 @@ function HomePage() {
   )
 }
 
-type OpenState =
-  | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly info: SourceInfo }
-  | { readonly status: 'error'; readonly error: ErrorBody }
-
+/** 연 영상 하나. 흐름은 machines/source.ts, 이 컴포넌트는 상태를 그리기만 한다 */
 function SourcePanel(props: {
   readonly id: string
   readonly interval: ThumbInterval
@@ -384,27 +365,17 @@ function SourcePanel(props: {
   readonly onOpened: (id: string) => void
   readonly onClose: () => void
 }) {
-  const { id, interval, mode } = props
-  const [state, setState] = useState<OpenState>({ status: 'loading' })
-  // 서버가 소스를 잃어버리면(재시작 등) 한 번 다시 연다
-  const [attempt, setAttempt] = useState(0)
+  const { id, interval, mode, formats } = props
+  const [state, send] = useMachine(liveSourceMachine, {
+    input: { id, interval, mode, formats },
+  })
+  const { context } = state
 
+  // 처음 열렸을 때 한 번 최근 목록에 넣는다
+  const opened = context.info !== undefined
   useEffect(() => {
-    let active = true
-    setState({ status: 'loading' })
-    openSource({ data: { id, interval, mode } }).then(
-      (info) => {
-        if (!active) return
-        setState({ status: 'ready', info })
-        props.onOpened(info.id)
-      },
-      (error: unknown) =>
-        active && setState({ status: 'error', error: toErrorBody(error) }),
-    )
-    return () => {
-      active = false
-    }
-  }, [id, interval, mode, attempt])
+    if (opened) props.onOpened(id)
+  }, [opened, id])
 
   const close = (
     <HStack justify="end">
@@ -412,20 +383,26 @@ function SourcePanel(props: {
     </HStack>
   )
 
-  if (state.status === 'loading') {
+  if (state.matches('opening') || state.matches('reopening')) {
     return mode === 'scene' ? (
-      <SceneAnalyzing />
+      <SceneAnalyzing seconds={context.elapsed} />
     ) : (
       <Center height="100%">
         <HStack gap={2} align="center">
           <Spinner />
-          <Text color="secondary">여는 중…</Text>
+          <Text color="secondary">
+            {state.matches('reopening') ? '다시 여는 중…' : '여는 중…'}
+          </Text>
         </HStack>
       </Center>
     )
   }
-  if (state.status === 'error') {
-    const { code, message } = state.error
+
+  if (state.matches('failed') || context.info === undefined) {
+    const { code, message } = context.failure ?? {
+      code: 'INTERNAL',
+      message: '알 수 없는 오류',
+    }
     return (
       <VStack gap={3}>
         {close}
@@ -450,27 +427,22 @@ function SourcePanel(props: {
       </VStack>
     )
   }
+
   return (
     <SourceView
-      info={state.info}
-      interval={interval}
-      mode={mode}
-      formats={props.formats}
+      context={context}
+      send={send}
+      finished={state.matches({ ready: { stream: 'finished' } })}
+      busy={!state.matches({ ready: { task: 'idle' } })}
       onInterval={props.onInterval}
       onMode={props.onMode}
-      onLost={() => attempt === 0 && setAttempt(1)}
       onClose={props.onClose}
     />
   )
 }
 
 /** 장면 분석은 영상 전체를 읽으므로 경과 시간을 보여준다 (분석 결과는 캐시되어 두 번째부터는 즉시) */
-function SceneAnalyzing() {
-  const [seconds, setSeconds] = useState(0)
-  useEffect(() => {
-    const timer = setInterval(() => setSeconds((s) => s + 1), 1000)
-    return () => clearInterval(timer)
-  }, [])
+function SceneAnalyzing({ seconds }: { readonly seconds: number }) {
   return (
     <Center height="100%">
       <VStack gap={2} align="center">
@@ -484,30 +456,28 @@ function SceneAnalyzing() {
   )
 }
 
-function SourceView(props: {
-  readonly info: SourceInfo
-  /** 요청한 간격·방식 */
-  readonly interval: ThumbInterval
-  readonly mode: ThumbMode
-  readonly formats: ReadonlyArray<FrameFormat>
+function SourceView({
+  context,
+  send,
+  finished,
+  busy,
+  ...props
+}: {
+  readonly context: SourceContext
+  readonly send: (event: SourceEvent) => void
+  /** 썸네일을 다 만들었다 */
+  readonly finished: boolean
+  /** 구간 세트를 만들거나 전체 세트로 돌아가는 중 */
+  readonly busy: boolean
   readonly onInterval: (i: ThumbInterval) => void
   readonly onMode: (mode: ThumbMode) => void
-  readonly onLost: () => void
   readonly onClose: () => void
 }) {
-  // 구간 재생성·전체 보기로 세트가 바뀐다. 처음 연 세트는 props.info
-  const [info, setInfo] = useState(props.info)
-  const events = useSourceEvents(info.id, info.setId, info.times.length)
-  const [selected, setSelected] = useState<number | undefined>(undefined)
-  // 선택한 썸네일 기준 ±이동량 (초)
-  const [offset, setOffset] = useState(0)
-  const [format, setFormat] = useFrameFormat(props.formats)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string>()
-  const [retrying, setRetrying] = useState<ReadonlySet<number>>(new Set())
+  const info = context.info!
+  const { selected, offset, thumbs, done } = context
+  const total = info.times.length
 
-  const selectedThumb =
-    selected === undefined ? undefined : events.thumbs[selected]
+  const selectedThumb = selected === undefined ? undefined : thumbs[selected]
   const base = selected === undefined ? undefined : info.times[selected]
   // 영상 범위 안으로, 밀리초 단위
   const previewT =
@@ -518,71 +488,10 @@ function SourceView(props: {
           Math.floor(info.duration * 1000 - 1) / 1000,
         )
 
-  const select = useCallback((index: number | undefined) => {
-    setSelected(index)
-    setOffset(0)
-  }, [])
-
-  useEffect(() => {
-    if (events.lost) props.onLost()
-  }, [events.lost])
-
-  const run = async (task: () => Promise<SourceInfo>) => {
-    setBusy(true)
-    setError(undefined)
-    try {
-      const next = await task()
-      setInfo(next)
-      select(undefined)
-    } catch (e) {
-      setError(toErrorBody(e).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  // 선택한 칸의 앞뒤 썸네일 사이 (끝 칸이면 세트 구간·영상 끝까지)
-  const more =
-    selected === undefined
-      ? undefined
-      : () => {
-          const from = info.times[selected - 1] ?? info.range?.from ?? 0
-          const to = info.times[selected + 1] ?? info.range?.to ?? info.duration
-          void run(() =>
-            createSet({
-              data: {
-                id: info.id,
-                count: RANGE_COUNT,
-                from,
-                to,
-              },
-            }),
-          )
-        }
-
-  const backToFull = () =>
-    run(() =>
-      openSource({
-        data: { id: info.id, interval: props.interval, mode: props.mode },
-      }),
-    )
-
-  const retry = async (index: number) => {
-    setRetrying((r) => new Set(r).add(index))
-    try {
-      events.apply(
-        await retryThumb({ data: { id: info.id, setId: info.setId, index } }),
-      )
-    } catch (e) {
-      setError(toErrorBody(e).message)
-    } finally {
-      setRetrying((r) => {
-        const next = new Set(r)
-        next.delete(index)
-        return next
-      })
-    }
-  }
+  const select = useCallback(
+    (index: number | undefined) => send({ type: 'SELECT', index }),
+    [send],
+  )
 
   // ,/. = ±1프레임, Shift+←/→ = ±1초 (선택한 썸네일이 있을 때)
   useEffect(() => {
@@ -603,11 +512,11 @@ function SourceView(props: {
                 : 0
       if (step === 0) return
       e.preventDefault()
-      setOffset((o) => o + step)
+      send({ type: 'STEP', seconds: step })
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selected, info.fps])
+  }, [selected, info.fps, send])
 
   return (
     <VStack as="section" gap={5}>
@@ -633,7 +542,7 @@ function SourceView(props: {
         </HStack>
         <HStack gap={3} wrap="wrap" align="center">
           <SegmentedControl
-            value={props.mode}
+            value={context.mode}
             onChange={(m) => props.onMode(m as ThumbMode)}
             isDisabled={busy}
             label="썸네일 방식"
@@ -641,12 +550,12 @@ function SourceView(props: {
             <SegmentedControlItem value="even" label="균등" />
             <SegmentedControlItem value="scene" label="장면" />
           </SegmentedControl>
-          {props.mode === 'even' && (
+          {context.mode === 'even' && (
             <Selector
               label="간격"
               isLabelHidden
               variant="secondary"
-              value={String(props.interval)}
+              value={String(context.interval)}
               options={INTERVALS.map((i) => ({
                 value: String(i),
                 label: `${i}초마다`,
@@ -660,15 +569,13 @@ function SourceView(props: {
               label="썸네일 생성 진행률"
               isLabelHidden
               hasValueLabel
-              max={Math.max(1, events.total)}
-              value={events.done}
-              variant={events.finished ? 'success' : 'accent'}
-              formatValueLabel={() =>
-                events.finished ? '완료' : `${events.done}/${events.total}`
-              }
+              max={Math.max(1, total)}
+              value={done}
+              variant={finished ? 'success' : 'accent'}
+              formatValueLabel={() => (finished ? '완료' : `${done}/${total}`)}
             />
           </VStack>
-          {props.mode === 'scene' && info.range === undefined && (
+          {context.mode === 'scene' && info.range === undefined && (
             <Text type="supporting" data-scene-note>
               {info.mode === 'even'
                 ? '장면 전환을 찾지 못해 균등 분할로 보여줍니다'
@@ -684,13 +591,13 @@ function SourceView(props: {
               <Button
                 size="sm"
                 label="전체 보기"
-                onClick={backToFull}
+                onClick={() => send({ type: 'FULL' })}
                 isDisabled={busy}
               />
             </HStack>
           )}
         </HStack>
-        {error && <Banner status="error" title={error} />}
+        {context.notice && <Banner status="error" title={context.notice} />}
       </VStack>
 
       {previewT !== undefined && (
@@ -700,23 +607,23 @@ function SourceView(props: {
           placeholder={
             selectedThumb?.status === 'ready' ? selectedThumb.url : undefined
           }
-          format={format}
-          formats={props.formats}
-          onFormat={setFormat}
-          onStep={(seconds) => setOffset((o) => o + seconds)}
-          onMore={more}
+          format={context.format}
+          formats={context.formats}
+          onFormat={(format) => send({ type: 'FORMAT', format })}
+          onStep={(seconds) => send({ type: 'STEP', seconds })}
+          onMore={() => send({ type: 'MORE' })}
           busy={busy}
         />
       )}
 
       <ThumbnailGrid
         times={info.times}
-        thumbs={events.thumbs}
+        thumbs={thumbs}
         aspect={info.width / info.height}
         selected={selected}
         onSelect={select}
-        onRetry={(index) => void retry(index)}
-        retrying={retrying}
+        onRetry={(index) => send({ type: 'RETRY', index })}
+        retrying={context.retrying}
       />
     </VStack>
   )

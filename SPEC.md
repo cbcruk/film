@@ -216,10 +216,14 @@ film/
       VideoTable.tsx                             # 영상 표 (정렬, 썸네일 표시, 행 열기)
       ThumbnailGrid.tsx
       FramePreview.tsx
+    machines/                                    # 클라이언트 상태 (xstate). 화면은 상태를 그리고 이벤트만 보낸다
+      library.ts                                 # 목록: 탭·검색·정렬·최근 연 영상·새로고침
+      source.ts                                  # 연 영상: 열기 → 썸네일 생성(SSE) → 구간 세트·재시도·다시 열기
+      source.live.ts                             # source 머신의 실제 구현 (서버 함수 호출, EventSource 구독)
+      frame.ts                                   # 원본 프레임 <img> 로딩
     hooks/
-      useSourceEvents.ts                         # EventSource 구독
-      useRecent.ts                               # 최근 연 파일 (localStorage)
       useElementWidth.ts                         # 요소 폭 측정 (나란히/전체 화면 전환)
+    themes/film.ts                               # neutral 테마 확장 (글꼴 Noto Sans KR). 수정 후 astryx theme build
   test/
     global-setup.ts                              # 픽스처 영상 생성 (vitest globalSetup)
     fixtures/                                    # 생성된 픽스처 (git 제외). 다시 만들려면 폴더 삭제
@@ -232,12 +236,18 @@ film/
     library.test.ts
     frames.test.ts
     timecode.test.ts
+    machines.test.ts                             # 클라이언트 상태 머신 (가짜 서버로 흐름 확인)
 ```
 
 ### 기술 선택
 
 - 프레임워크: **TanStack Start (`@tanstack/react-start` 1.169)** + React 19, Vite 8, TypeScript 7
 - 서버 로직: **Effect 4.1 (`effect`)** + `@effect/platform-node` (ChildProcess·FileSystem 구현) — `src/server/*` 한정. React 화면에는 쓰지 않는다
+- 클라이언트 상태: **XState 5 (`xstate`, `@xstate/react`)** — `src/machines/*`. 흐름을 상태 이름(여는 중·생성 중·완료·다시 여는 중…)으로 읽을 수 있게 한다
+  - 연 영상·간격·방식은 공유·뒤로 가기를 위해 URL(`?v=&i=&m=`)에 두고, 머신은 그 값을 입력으로 받는다. 창 크기·폭 측정 같은 배치 값은 머신에 넣지 않는다
+  - 서버 호출·SSE는 머신에 이름만 선언하고(`actors`), 실제 구현은 `source.live.ts`가 끼워 넣는다. 테스트는 가짜 구현으로 흐름만 확인한다 (`test/machines.test.ts`)
+  - localStorage(최근 기록·저장 포맷)는 머신이 시작된 뒤에 읽는다. 첫 상태에서 읽으면 서버 HTML과 달라져 hydration 오류가 난다
+  - 서버가 소스를 잃으면(SSE 404) 같은 조건으로 다시 연다. 연달아 3번 넘게 잃으면 실패로 끝낸다 (세트를 끝까지 받으면 횟수 초기화)
 - 검증: **Effect Schema** → `Schema.toStandardSchemaV1(...)`로 서버 함수 `.validator()`에 연결
 - 테스트: **Vitest 5** + `@effect/vitest`
 - 포맷: **Prettier** (`semi: false`, `singleQuote: true`)

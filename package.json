@@ -19,9 +19,11 @@
     "@stylexjs/stylex": "^0.19.1",
     "@tanstack/react-router": "^1.170.46",
     "@tanstack/react-start": "^1.169.4",
+    "@xstate/react": "^6.1.0",
     "effect": "^4.1.2",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "xstate": "^5.33.3"
   },
   "devDependencies": {
     "@astryxdesign/cli": "^0.7.8",

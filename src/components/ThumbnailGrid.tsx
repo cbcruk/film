@@ -9,7 +9,7 @@ import { Skeleton } from '@astryxdesign/core/Skeleton'
 import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import { VStack } from '@astryxdesign/core/VStack'
-import type { ThumbState } from '../hooks/useSourceEvents.ts'
+import type { ThumbState } from '../machines/source.ts'
 import { isTextEntry } from '../lib/keyboard.ts'
 import { formatTimecode } from '../lib/timecode.ts'
 

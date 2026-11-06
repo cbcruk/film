@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useLayoutEffect } from 'react'
+import { useMachine } from '@xstate/react'
 import { AspectRatio } from '@astryxdesign/core/AspectRatio'
 import { Button } from '@astryxdesign/core/Button'
 import { ButtonGroup } from '@astryxdesign/core/ButtonGroup'
@@ -14,6 +15,7 @@ import { Text } from '@astryxdesign/core/Text'
 import { VStack } from '@astryxdesign/core/VStack'
 import { formatTimecode, frameFilename, frameUrl } from '../lib/timecode.ts'
 import type { FrameFormat, SourceInfo } from '../lib/types.ts'
+import { frameMachine } from '../machines/frame.ts'
 
 interface Props {
   readonly info: SourceInfo
@@ -54,9 +56,14 @@ export function FramePreview({
   const frame = 1 / (info.fps > 0 ? info.fps : 30)
   const aspect = info.width / info.height
   const src = frameUrl(info.id, info.name, t, format)
-  // 어느 URL이 로드·실패했는지로 상태를 정한다 (캐시된 이미지는 onLoad가 바로 올 수 있음)
-  const [result, setResult] = useState<{ src: string; ok: boolean }>()
-  const status = result?.src !== src ? 'loading' : result.ok ? 'ready' : 'error'
+  // 로딩 상태는 machines/frame.ts. 주소가 바뀌면 그림을 그리기 전에 알린다
+  const [frameState, sendFrame] = useMachine(frameMachine, { input: { src } })
+  useLayoutEffect(() => sendFrame({ type: 'SHOW', src }), [src, sendFrame])
+  const status = frameState.matches('ready')
+    ? 'ready'
+    : frameState.matches('failed')
+      ? 'error'
+      : 'loading'
 
   return (
     <VStack as="figure" gap={3}>
@@ -73,8 +80,8 @@ export function FramePreview({
               alt={`${info.name} ${formatTimecode(t)}`}
               width={info.width}
               height={info.height}
-              onLoad={() => setResult({ src, ok: true })}
-              onError={() => setResult({ src, ok: false })}
+              onLoad={() => sendFrame({ type: 'LOADED', src })}
+              onError={() => sendFrame({ type: 'FAILED', src })}
               data-preview={status}
               // 로드 전에는 아래 썸네일이 보이도록 감춘다
               style={{ opacity: status === 'ready' ? 1 : 0 }}
@@ -136,25 +143,4 @@ export function FramePreview({
       </VStack>
     </VStack>
   )
-}
-
-const STORAGE_KEY = 'film.format'
-
-/** 마지막으로 고른 포맷 (localStorage). 이 ffmpeg가 못 만드는 포맷이면 첫 번째로 */
-export const useFrameFormat = (formats: ReadonlyArray<FrameFormat>) => {
-  const fallback = formats.includes('png') ? 'png' : (formats[0] ?? 'png')
-  const [format, setFormat] = useState<FrameFormat>(fallback)
-
-  // 서버 렌더링과 어긋나지 않도록 마운트 후에 읽는다
-  useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved && formats.includes(saved as FrameFormat))
-      setFormat(saved as FrameFormat)
-  }, [formats])
-
-  const choose = (next: FrameFormat) => {
-    setFormat(next)
-    localStorage.setItem(STORAGE_KEY, next)
-  }
-  return [formats.includes(format) ? format : fallback, choose] as const
 }

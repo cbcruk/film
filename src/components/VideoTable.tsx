@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import {
   Table,
   pixel,
@@ -10,6 +10,7 @@ import type { TableColumn, TablePlugin } from '@astryxdesign/core/Table'
 import { Text } from '@astryxdesign/core/Text'
 import { VStack } from '@astryxdesign/core/VStack'
 import type { VideoList } from '../lib/types.ts'
+import type { Sort } from '../machines/library.ts'
 
 type Video = VideoList['videos'][number]
 
@@ -23,18 +24,15 @@ interface Row extends Record<string, unknown> {
   readonly cached: boolean
 }
 
-type SortKey = 'name' | 'size' | 'mtime'
-type Sort = Array<{
-  sortKey: SortKey
-  direction: 'ascending' | 'descending'
-}>
-
 interface Props {
   readonly videos: ReadonlyArray<Video>
   readonly openId: string | undefined
   readonly onOpen: (id: string) => void
   /** 좁은 폭: 크기·수정일 열을 이름 아래로 접는다 */
   readonly isStacked: boolean
+  /** 정렬은 machines/library.ts가 이미 반영해 videos를 준다 */
+  readonly sort: Sort
+  readonly onSort: (sort: Sort) => void
 }
 
 export const formatSize = (bytes: number) =>
@@ -60,28 +58,19 @@ const OPEN_CELL_STYLE = { backgroundColor: 'var(--color-accent-muted)' }
 const isRowItself = (target: EventTarget | null) =>
   !(target as HTMLElement | null)?.closest('button, input, a, label')
 
-const compare = (a: Row, b: Row, key: SortKey) =>
-  key === 'size'
-    ? a.size - b.size
-    : key === 'mtime'
-      ? a.mtime.localeCompare(b.mtime)
-      : a.name.localeCompare(b.name, 'ko', { numeric: true })
-
-export function VideoTable({ videos, openId, onOpen, isStacked }: Props) {
-  // 서버가 최근 수정순으로 준다. 헤더를 누르면 바뀐다
-  const [sort, setSort] = useState<Sort>([])
-
-  const rows = useMemo(() => {
-    const data: Row[] = videos.map((v) => ({ ...v }))
-    const [first] = sort
-    if (first === undefined) return data
-    const sign = first.direction === 'ascending' ? 1 : -1
-    return data.sort((a, b) => sign * compare(a, b, first.sortKey))
-  }, [videos, sort])
+export function VideoTable({
+  videos,
+  openId,
+  onOpen,
+  isStacked,
+  sort,
+  onSort,
+}: Props) {
+  const rows = useMemo((): Row[] => videos.map((v) => ({ ...v })), [videos])
 
   const sortable = useTableSortable<Row>({
-    sort,
-    onSortChange: (next) => setSort(next as Sort),
+    sort: [...sort],
+    onSortChange: (next) => onSort(next as Sort),
   })
 
   const rowStatus = useTableRowStatus<Row>({
