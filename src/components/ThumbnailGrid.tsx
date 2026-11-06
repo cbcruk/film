@@ -1,4 +1,3 @@
-import { useEffect } from 'react'
 import { AspectRatio } from '@astryxdesign/core/AspectRatio'
 import { Button } from '@astryxdesign/core/Button'
 import { Center } from '@astryxdesign/core/Center'
@@ -10,7 +9,6 @@ import { Text } from '@astryxdesign/core/Text'
 import { Token } from '@astryxdesign/core/Token'
 import { VStack } from '@astryxdesign/core/VStack'
 import type { ThumbState } from '../machines/source.ts'
-import { isTextEntry } from '../lib/keyboard.ts'
 import { formatTimecode } from '../lib/timecode.ts'
 
 /** 이미지 모서리 (AspectRatio가 overflow: clip이라 그대로 잘린다) */
@@ -49,26 +47,6 @@ export function ThumbnailGrid({
   onRetry,
   retrying,
 }: Props) {
-  // 포커스 위치와 상관없이 ←/→로 이동한다 (Safari는 버튼을 클릭해도 포커스를 주지 않는다)
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
-      // Shift+←/→는 미리보기의 ±1초 이동
-      if (step === 0 || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return
-      if (isTextEntry(e.target)) return
-      e.preventDefault()
-      const next = selected === undefined ? 0 : selected + step
-      if (next >= 0 && next < times.length) {
-        onSelect(next)
-        document
-          .getElementById(`thumb-${next}`)
-          ?.scrollIntoView({ block: 'nearest' })
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selected, times.length, onSelect])
-
   return (
     <Grid columns={{ minWidth: 200, max: 12 }} gap={3}>
       {times.map((t, i) => {

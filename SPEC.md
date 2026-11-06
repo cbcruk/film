@@ -220,7 +220,7 @@ film/
       library.ts                                 # 목록: 탭·검색·정렬·최근 연 영상·새로고침
       source.ts                                  # 연 영상: 열기 → 썸네일 생성(SSE) → 구간 세트·재시도·다시 열기
       source.live.ts                             # source 머신의 실제 구현 (서버 함수 호출, EventSource 구독)
-      frame.ts                                   # 원본 프레임 <img> 로딩
+      frame.ts                                   # 원본 프레임 <img> 한 장의 로딩 (주소마다 새로 만든다)
     hooks/
       useElementWidth.ts                         # 요소 폭 측정 (나란히/전체 화면 전환)
     themes/film.ts                               # neutral 테마 확장 (글꼴 Noto Sans KR). 수정 후 astryx theme build
@@ -319,7 +319,8 @@ film/
 - **CSRF**: `src/start.ts`에 `createCsrfMiddleware`를 서버 함수 전용으로 등록했다 (TanStack이 dev 서버에서 미등록 경고를 냄, M3). 같은 출처는 200, 다른 출처·헤더 없음은 403 확인.
 - **화면 상태**: 선택한 영상·간격·방식은 URL 검색 파라미터(`?v={id}&i=10&m=scene`)에 둔다. 새로고침해도 유지되고, 서버는 같은 세트를 돌려준다.
 - **StrictMode**: dev에서는 effect가 두 번 실행되어 `openSource`가 동시에 두 번 호출된다. `Jobs.open`은 `Semaphore(1)`로 한 번에 하나씩 처리해 같은 세트를 돌려준다 (M3에서 발견한 경쟁 상태, 테스트 추가).
-- **키보드**: ←/→는 `window`에서 받는다 (Safari는 버튼을 클릭해도 포커스를 주지 않음). 입력창·선택 상자에서는 무시.
+- **키보드**: ←/→는 `window`에서 받는다 (Safari는 버튼을 클릭해도 포커스를 주지 않음). 입력창·선택 상자에서는 무시. 썸네일이 준비된 동안 source 머신이 `keyboard` 작업으로 듣고 NAVIGATE·STEP으로 바꾼다.
+- **useEffect 없음**: 외부와의 동기화는 머신 작업(구독·단축키·저장소 읽기), `key`(주소가 바뀌면 이미지 머신 새로 만들기), ref 콜백(ResizeObserver)으로 한다. 오른쪽 창의 2/3 맞춤은 폭 측정 콜백에서 하고, 사용자가 끌면 멈춘다.
 - **화면 확인**: 설치된 Chrome을 헤드리스로 띄워 DevTools 프로토콜로 확인한다 (로드 후 대기 → 스크린샷, 키 입력, 네트워크·SSE 기록).
 - **Effect 버전**: v4는 v3와 모듈 구성·API 이름이 다르다. 설치된 패키지의 타입 정의와 `node_modules/effect/CLAUDE.md`·`ai-docs`를 기준으로 작성한다. TanStack도 `node_modules/@tanstack/*/skills`의 문서를 기준으로 한다 (예: 검증기 메서드는 `inputValidator`가 아니라 `validator`).
 - **ffmpeg 확인**: `Ffmpeg.checkInstalled`로 확인하고, 실패하면 화면에 안내를 표시한다 (M0 화면에서 사용 중).

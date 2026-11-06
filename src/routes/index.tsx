@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useMachine } from '@xstate/react'
 import { fromPromise } from 'xstate'
@@ -34,7 +34,6 @@ import { VideoTable } from '../components/VideoTable.tsx'
 import { getHealth } from '../functions/health.ts'
 import { listVideos } from '../functions/sources.ts'
 import { useElementWidth } from '../hooks/useElementWidth.ts'
-import { isTextEntry } from '../lib/keyboard.ts'
 import { formatTimecode } from '../lib/timecode.ts'
 import type { FrameFormat, ThumbInterval, ThumbMode } from '../lib/types.ts'
 import {
@@ -107,15 +106,23 @@ function HomePage() {
   const refreshing = library.matches('refreshing')
   const refresh = () => sendLibrary({ type: 'REFRESH' })
 
-  const [surfaceRef, surfaceWidth] = useElementWidth<HTMLDivElement>()
+  // 사용자가 경계를 끌기 전까지는 화면 폭이 바뀔 때마다 오른쪽 창을 2/3로 맞춘다.
+  // useElementWidth는 새 폭을 화면에 반영한 뒤 onResize를 부르므로 maxSize도 이미 새 값이다
+  const movedPane = useRef(false)
+  const placingPane = useRef(false)
+  const [surfaceRef, surfaceWidth] = useElementWidth<HTMLDivElement>(
+    (width) => {
+      if (movedPane.current || width <= 0) return
+      placingPane.current = true
+      pane.resize(Math.round(width * PANE_DEFAULT_SHARE))
+      placingPane.current = false
+    },
+  )
   const [listRef, listWidth] = useElementWidth<HTMLDivElement>()
   const isMeasured = surfaceWidth > 0
   const isSingleSurface = isMeasured && surfaceWidth < SINGLE_SURFACE_BELOW
   const isStacked = listWidth > 0 && listWidth < STACK_ROWS_BELOW
 
-  // 사용자가 경계를 끌기 전까지는 화면 폭의 2/3로 맞춘다
-  const movedPane = useRef(false)
-  const placingPane = useRef(false)
   const pane = useResizable({
     defaultSize: '66%',
     minSize: PANE_MIN_WIDTH,
@@ -126,13 +133,6 @@ function HomePage() {
       if (!placingPane.current) movedPane.current = true
     },
   })
-  const { resize: resizePane } = pane
-  useLayoutEffect(() => {
-    if (movedPane.current || !isMeasured) return
-    placingPane.current = true
-    resizePane(Math.round(surfaceWidth * PANE_DEFAULT_SHARE))
-    placingPane.current = false
-  }, [isMeasured, surfaceWidth, resizePane])
 
   const videos = list.ok ? list.value.videos : []
   const visible = useMemo(
@@ -366,16 +366,14 @@ function SourcePanel(props: {
   readonly onClose: () => void
 }) {
   const { id, interval, mode, formats } = props
-  const [state, send] = useMachine(liveSourceMachine, {
-    input: { id, interval, mode, formats },
-  })
+  const [state, send] = useMachine(
+    // 처음 열기에 성공하면 최근 목록에 넣는다 (매 렌더링의 최신 구현이 쓰인다)
+    liveSourceMachine.provide({
+      actions: { opened: () => props.onOpened(id) },
+    }),
+    { input: { id, interval, mode, formats } },
+  )
   const { context } = state
-
-  // 처음 열렸을 때 한 번 최근 목록에 넣는다
-  const opened = context.info !== undefined
-  useEffect(() => {
-    if (opened) props.onOpened(id)
-  }, [opened, id])
 
   const close = (
     <HStack justify="end">
@@ -492,31 +490,6 @@ function SourceView({
     (index: number | undefined) => send({ type: 'SELECT', index }),
     [send],
   )
-
-  // ,/. = ±1프레임, Shift+←/→ = ±1초 (선택한 썸네일이 있을 때)
-  useEffect(() => {
-    if (selected === undefined) return
-    const frame = 1 / (info.fps > 0 ? info.fps : 30)
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isTextEntry(e.target)) return
-      if (e.altKey || e.metaKey || e.ctrlKey) return
-      const step =
-        e.key === ','
-          ? -frame
-          : e.key === '.'
-            ? frame
-            : e.shiftKey && e.key === 'ArrowLeft'
-              ? -1
-              : e.shiftKey && e.key === 'ArrowRight'
-                ? 1
-                : 0
-      if (step === 0) return
-      e.preventDefault()
-      send({ type: 'STEP', seconds: step })
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selected, info.fps, send])
 
   return (
     <VStack as="section" gap={5}>

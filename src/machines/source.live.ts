@@ -1,13 +1,49 @@
 /** source 머신의 실제 구현: 서버 함수 호출과 SSE 구독 */
 import { fromCallback, fromPromise } from 'xstate'
 import { createSet, openSource, retryThumb } from '../functions/sources.ts'
+import { isTextEntry } from '../lib/keyboard.ts'
 import { eventsUrl } from '../lib/timecode.ts'
 import type { SourceEvent as ServerEvent } from '../lib/types.ts'
 import { sourceActors, sourceMachine, toErrorBody } from './source.ts'
 import type { SourceEvent } from './source.ts'
 
 export const liveSourceMachine = sourceMachine.provide({
+  actions: {
+    revealSelected: ({ context }) =>
+      document
+        .getElementById(`thumb-${context.selected}`)
+        ?.scrollIntoView({ block: 'nearest' }),
+  },
   actors: {
+    /**
+     * ←/→ = 옆 썸네일, ,/. = ±1프레임, Shift+←/→ = ±1초.
+     * 포커스 위치와 상관없이 window에서 듣는다 (Safari는 버튼을 클릭해도 포커스를 주지 않는다)
+     */
+    keyboard: fromCallback<SourceEvent, { fps: number }>(
+      ({ input, sendBack }) => {
+        const frame = 1 / (input.fps > 0 ? input.fps : 30)
+        const onKeyDown = (e: KeyboardEvent) => {
+          if (isTextEntry(e.target) || e.altKey || e.metaKey || e.ctrlKey)
+            return
+          const arrow =
+            e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+          if (arrow !== 0) {
+            e.preventDefault()
+            sendBack(
+              e.shiftKey
+                ? { type: 'STEP', seconds: arrow }
+                : { type: 'NAVIGATE', step: arrow },
+            )
+          } else if (e.key === ',' || e.key === '.') {
+            e.preventDefault()
+            sendBack({ type: 'STEP', seconds: e.key === ',' ? -frame : frame })
+          }
+        }
+        window.addEventListener('keydown', onKeyDown)
+        return () => window.removeEventListener('keydown', onKeyDown)
+      },
+    ),
+
     openSource: fromPromise(({ input }) => openSource({ data: input })),
 
     createSet: fromPromise(({ input }) => createSet({ data: input })),

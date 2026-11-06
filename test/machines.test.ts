@@ -48,9 +48,19 @@ const fakeSource = (opts: {
     create: [] as unknown[],
     streams: [] as string[],
     retries: [] as number[],
+    opened: 0,
+    revealed: [] as Array<number | undefined>,
   }
   let push: (event: SourceEvent) => void = () => {}
   const machine = sourceMachine.provide({
+    actions: {
+      opened: () => {
+        calls.opened++
+      },
+      revealSelected: ({ context }) => {
+        calls.revealed.push(context.selected)
+      },
+    },
     actors: {
       openSource: fromPromise(() => {
         calls.open++
@@ -130,6 +140,41 @@ describe('source 머신', () => {
     actor.send({ type: 'MORE' })
     expect(actor.getSnapshot().context.offset).toBe(0)
     expect(calls.create).toEqual([])
+  })
+
+  it('←/→는 선택을 옮기고 시점을 0으로, 선택이 없으면 첫 칸부터, 끝에서는 멈춘다', async () => {
+    const { actor, calls } = fakeSource({})
+    actor.start()
+    await ready(actor)
+    actor.send({ type: 'NAVIGATE', step: 1 })
+    expect(actor.getSnapshot().context.selected).toBe(0)
+    actor.send({ type: 'STEP', seconds: 1 })
+    expect(actor.getSnapshot().context.offset).toBe(1)
+    actor.send({ type: 'NAVIGATE', step: 1 })
+    expect(actor.getSnapshot().context.selected).toBe(1)
+    expect(actor.getSnapshot().context.offset).toBe(0)
+    actor.send({ type: 'NAVIGATE', step: 1 })
+    actor.send({ type: 'NAVIGATE', step: 1 })
+    actor.send({ type: 'NAVIGATE', step: 1 }) // 4칸이므로 3에서 멈춘다
+    expect(actor.getSnapshot().context.selected).toBe(3)
+    actor.send({ type: 'SELECT', index: 0 })
+    actor.send({ type: 'NAVIGATE', step: -1 }) // 처음에서도 멈춘다
+    expect(actor.getSnapshot().context.selected).toBe(0)
+    expect(calls.revealed).toEqual([0, 1, 2, 3]) // 옮겼을 때만 스크롤
+  })
+
+  it('opened는 처음 열 때만 부른다 (다시 열기·전체 보기는 제외)', async () => {
+    const { actor, push, calls } = fakeSource({})
+    actor.start()
+    await ready(actor)
+    expect(calls.opened).toBe(1)
+    push({ type: 'LOST' })
+    await waitFor(actor, () => calls.open === 2)
+    await ready(actor)
+    actor.send({ type: 'FULL' })
+    await waitFor(actor, () => calls.open === 3)
+    await ready(actor)
+    expect(calls.opened).toBe(1)
   })
 
   it('선택한 칸의 앞뒤 사이로 새 세트를 만들고, 새 세트의 SSE를 구독한다', async () => {
@@ -394,18 +439,16 @@ describe('library 머신', () => {
 })
 
 describe('frame 머신', () => {
-  it('지금 주소의 결과만 반영하고, 이전 주소의 늦은 결과는 무시한다', () => {
-    const actor = createActor(frameMachine, { input: { src: '/a' } }).start()
-    expect(actor.getSnapshot().matches('loading')).toBe(true)
-    actor.send({ type: 'SHOW', src: '/b' })
-    actor.send({ type: 'LOADED', src: '/a' }) // 늦게 온 이전 이미지
-    expect(actor.getSnapshot().matches('loading')).toBe(true)
-    actor.send({ type: 'LOADED', src: '/b' })
-    expect(actor.getSnapshot().matches('ready')).toBe(true)
-    actor.send({ type: 'SHOW', src: '/b' }) // 같은 주소면 그대로
-    expect(actor.getSnapshot().matches('ready')).toBe(true)
-    actor.send({ type: 'SHOW', src: '/c' })
-    actor.send({ type: 'FAILED', src: '/c' })
-    expect(actor.getSnapshot().matches('failed')).toBe(true)
+  it('불러오는 중에서 성공하면 ready, 실패하면 failed', () => {
+    const loaded = createActor(frameMachine).start()
+    expect(loaded.getSnapshot().matches('loading')).toBe(true)
+    loaded.send({ type: 'LOADED' })
+    expect(loaded.getSnapshot().matches('ready')).toBe(true)
+    loaded.send({ type: 'FAILED' }) // 끝난 뒤의 결과는 무시
+    expect(loaded.getSnapshot().matches('ready')).toBe(true)
+
+    const failed = createActor(frameMachine).start()
+    failed.send({ type: 'FAILED' })
+    expect(failed.getSnapshot().matches('failed')).toBe(true)
   })
 })

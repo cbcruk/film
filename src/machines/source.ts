@@ -82,6 +82,8 @@ export type StreamEvent =
 export type SourceEvent =
   | StreamEvent
   | { type: 'SELECT'; index: number | undefined }
+  /** 키보드 ←/→: 옆 썸네일로 (선택이 없으면 첫 칸) */
+  | { type: 'NAVIGATE'; step: 1 | -1 }
   /** 미리보기 시점을 seconds만큼 옮긴다 (±1프레임·±1초) */
   | { type: 'STEP'; seconds: number }
   | { type: 'FORMAT'; format: FrameFormat }
@@ -124,6 +126,9 @@ const without = (set: ReadonlySet<number>, index: number) => {
   next.delete(index)
   return next
 }
+
+const nextIndex = (selected: number | undefined, step: 1 | -1) =>
+  selected === undefined ? 0 : selected + step
 
 const retryId = (index: number) => `retry-${index}`
 
@@ -173,6 +178,8 @@ export const sourceActors = {
       // 저장소를 못 쓰면 기본값 그대로
     }
   }),
+  /** 단축키를 듣고 NAVIGATE·STEP을 보낸다 (썸네일이 준비된 동안만). 구현은 source.live.ts */
+  keyboard: fromCallback<SourceEvent, { fps: number }>(() => {}),
   /** 1초마다 TICK */
   ticker: fromCallback<SourceEvent>(({ sendBack }) => {
     const timer = setInterval(() => sendBack({ type: 'TICK' }), 1000)
@@ -188,10 +195,19 @@ export const sourceMachine = setup({
   },
   actors: sourceActors,
   guards: {
+    canNavigate: ({ context, event }) => {
+      if (event.type !== 'NAVIGATE' || context.info === undefined) return false
+      const next = nextIndex(context.selected, event.step)
+      return next >= 0 && next < context.info.times.length
+    },
     canReopen: ({ context }) => context.reopenCount < MAX_REOPEN,
     hasSelection: ({ context }) => context.selected !== undefined,
   },
   actions: {
+    /** 처음 열기에 성공했다 (최근 목록 등). 화면이 구현을 넣는다 */
+    opened: () => {},
+    /** 선택한 칸이 보이게 스크롤. 구현은 source.live.ts */
+    revealSelected: () => {},
     saveFormat: ({ context }) => {
       try {
         localStorage.setItem(FORMAT_KEY, context.format)
@@ -241,7 +257,7 @@ export const sourceMachine = setup({
           }),
           onDone: {
             target: 'ready',
-            actions: assign(({ event }) => freshSet(event.output)),
+            actions: [assign(({ event }) => freshSet(event.output)), 'opened'],
           },
           onError: {
             target: 'failed',
@@ -261,7 +277,22 @@ export const sourceMachine = setup({
 
     ready: {
       type: 'parallel',
+      invoke: {
+        src: 'keyboard',
+        input: ({ context }) => ({ fps: context.info?.fps ?? 30 }),
+      },
       on: {
+        NAVIGATE: {
+          guard: 'canNavigate',
+          actions: [
+            assign({
+              selected: ({ context, event }) =>
+                nextIndex(context.selected, event.step),
+              offset: 0,
+            }),
+            'revealSelected',
+          ],
+        },
         SELECT: {
           actions: assign({
             selected: ({ event }) => event.index,

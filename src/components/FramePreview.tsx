@@ -1,4 +1,3 @@
-import { useLayoutEffect } from 'react'
 import { useMachine } from '@xstate/react'
 import { AspectRatio } from '@astryxdesign/core/AspectRatio'
 import { Button } from '@astryxdesign/core/Button'
@@ -54,41 +53,19 @@ export function FramePreview({
   busy,
 }: Props) {
   const frame = 1 / (info.fps > 0 ? info.fps : 30)
-  const aspect = info.width / info.height
   const src = frameUrl(info.id, info.name, t, format)
-  // 로딩 상태는 machines/frame.ts. 주소가 바뀌면 그림을 그리기 전에 알린다
-  const [frameState, sendFrame] = useMachine(frameMachine, { input: { src } })
-  useLayoutEffect(() => sendFrame({ type: 'SHOW', src }), [src, sendFrame])
-  const status = frameState.matches('ready')
-    ? 'ready'
-    : frameState.matches('failed')
-      ? 'error'
-      : 'loading'
 
   return (
     <VStack as="figure" gap={3}>
-      {/* 화면 높이의 62%를 넘지 않게 축소해서 보여줄 뿐, 실제 이미지는 원본 크기 */}
-      <Center>
-        <VStack width={`min(100%, calc(62vh * ${aspect}))`}>
-          <AspectRatio ratio={aspect} fit="contain">
-            {placeholder && status !== 'ready' && (
-              <img src={placeholder} alt="" aria-hidden />
-            )}
-            <img
-              key={src}
-              src={src}
-              alt={`${info.name} ${formatTimecode(t)}`}
-              width={info.width}
-              height={info.height}
-              onLoad={() => sendFrame({ type: 'LOADED', src })}
-              onError={() => sendFrame({ type: 'FAILED', src })}
-              data-preview={status}
-              // 로드 전에는 아래 썸네일이 보이도록 감춘다
-              style={{ opacity: status === 'ready' ? 1 : 0 }}
-            />
-          </AspectRatio>
-        </VStack>
-      </Center>
+      {/* 주소마다 새로 그린다 → 로딩 상태도 새로 시작 (버튼 등 나머지는 그대로라 포커스 유지) */}
+      <FrameImage
+        key={src}
+        src={src}
+        alt={`${info.name} ${formatTimecode(t)}`}
+        width={info.width}
+        height={info.height}
+        placeholder={placeholder}
+      />
 
       <HStack gap={3} wrap="wrap" align="center" justify="between">
         <ButtonGroup label="시점 이동">
@@ -123,24 +100,74 @@ export function FramePreview({
               <SegmentedControlItem key={f} value={f} label={LABELS[f]} />
             ))}
           </SegmentedControl>
-          {status === 'loading' && (
-            <HStack gap={1} align="center">
-              <Spinner size="sm" />
-              <Text type="supporting">원본 불러오는 중…</Text>
-            </HStack>
-          )}
-          {status === 'error' && (
-            <HStack gap={1} align="center">
-              <StatusDot variant="error" label="오류" />
-              <Text type="supporting">원본 프레임을 만들지 못했습니다</Text>
-            </HStack>
-          )}
         </HStack>
         <Text type="supporting">
           {frameFilename(info.name, t, format)} · {info.width}×{info.height} ·
           이미지를 우클릭해 [이미지를 다른 이름으로 저장]
         </Text>
       </VStack>
+    </VStack>
+  )
+}
+
+/**
+ * 원본 프레임 이미지와 로딩 표시. 로딩 상태는 machines/frame.ts.
+ * 원본이 오는 동안 썸네일(placeholder)을 확대해 보여준다.
+ */
+function FrameImage({
+  src,
+  alt,
+  width,
+  height,
+  placeholder,
+}: {
+  readonly src: string
+  readonly alt: string
+  readonly width: number
+  readonly height: number
+  readonly placeholder: string | undefined
+}) {
+  const [state, send] = useMachine(frameMachine)
+  const ready = state.matches('ready')
+  const aspect = width / height
+
+  return (
+    <VStack gap={2}>
+      {/* 화면 높이의 62%를 넘지 않게 축소해서 보여줄 뿐, 실제 이미지는 원본 크기 */}
+      <Center>
+        <VStack width={`min(100%, calc(62vh * ${aspect}))`}>
+          <AspectRatio ratio={aspect} fit="contain">
+            {placeholder && !ready && (
+              <img src={placeholder} alt="" aria-hidden />
+            )}
+            <img
+              src={src}
+              alt={alt}
+              width={width}
+              height={height}
+              onLoad={() => send({ type: 'LOADED' })}
+              onError={() => send({ type: 'FAILED' })}
+              data-preview={
+                ready ? 'ready' : state.matches('failed') ? 'error' : 'loading'
+              }
+              // 로드 전에는 아래 썸네일이 보이도록 감춘다
+              style={{ opacity: ready ? 1 : 0 }}
+            />
+          </AspectRatio>
+        </VStack>
+      </Center>
+      {state.matches('loading') && (
+        <HStack gap={1} align="center" justify="center">
+          <Spinner size="sm" />
+          <Text type="supporting">원본 불러오는 중…</Text>
+        </HStack>
+      )}
+      {state.matches('failed') && (
+        <HStack gap={1} align="center" justify="center">
+          <StatusDot variant="error" label="오류" />
+          <Text type="supporting">원본 프레임을 만들지 못했습니다</Text>
+        </HStack>
+      )}
     </VStack>
   )
 }
