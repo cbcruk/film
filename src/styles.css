@@ -1,5 +1,5 @@
 /* Astryx 기본 스타일과 테마. 서버 렌더링 때 <link>로 바로 실리도록 여기서 불러온다 */
 @import '@astryxdesign/core/reset.css';
 @import '@astryxdesign/core/astryx.css';
-@import '@astryxdesign/theme-neutral/fonts.css';
-@import '@astryxdesign/theme-neutral/theme.css';
+@import './fonts.css';
+@import './themes/film.css';

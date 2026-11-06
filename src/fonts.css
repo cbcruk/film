@@ -1,0 +1,8 @@
+/*
+ * 앱 글꼴 Noto Sans KR (src/themes/film.ts). 외부 요청 없이 앱이 직접 제공한다.
+ * 굵기마다 글자 범위(unicode-range)별로 쪼개져 있어 화면에 쓰인 글자의 조각만 받는다.
+ */
+@import '@fontsource/noto-sans-kr/400.css';
+@import '@fontsource/noto-sans-kr/500.css';
+@import '@fontsource/noto-sans-kr/600.css';
+@import '@fontsource/noto-sans-kr/700.css';

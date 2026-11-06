@@ -8,4 +8,6 @@ package-lock.json
 src/routeTree.gen.ts
 AGENTS.md
 GEMINI.md
-src/astryx-themes.ts
+src/themes/film.css
+src/themes/film.js
+src/themes/*.d.ts

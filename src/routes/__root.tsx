@@ -8,7 +8,7 @@ import {
 import { EmptyState } from '@astryxdesign/core/EmptyState'
 import { Theme } from '@astryxdesign/core/theme'
 import { VStack } from '@astryxdesign/core/VStack'
-import { defaultThemeSlug, themes } from '../astryx-themes.ts'
+import { filmTheme } from '../themes/film.js'
 import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
@@ -39,7 +39,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <HeadContent />
       </head>
       <body>
-        <Theme theme={themes[defaultThemeSlug]}>
+        <Theme theme={filmTheme}>
           {/* 화면 높이에 맞춰 목록·본문이 각자 스크롤된다 */}
           <VStack height="100dvh">{children}</VStack>
         </Theme>
