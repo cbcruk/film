@@ -12,17 +12,25 @@ import {
   Semaphore,
   Stream,
 } from 'effect'
-import { rangeTimes, thumbUrl, thumbnailTimes } from '../lib/timecode.ts'
+import {
+  type SceneCut,
+  pickScenes,
+  rangeTimes,
+  thumbUrl,
+  thumbnailTimes,
+} from '../lib/timecode.ts'
 import type {
   RetryResult,
   SourceEvent,
   SourceInfo,
   ThumbCount,
+  ThumbMode,
   VideoMeta,
 } from '../lib/types.ts'
 import { Cache } from './cache.ts'
 import { AppConfig } from './config.ts'
 import {
+  type ExtractFailed,
   type FfmpegTimeout,
   FileNotFound,
   InvalidParam,
@@ -36,6 +44,8 @@ import { Library } from './library.ts'
 interface Job {
   readonly info: SourceInfo
   readonly file: string
+  /** 요청한 방식·개수 (장면 모드는 실제 장수가 적거나 균등으로 대신될 수 있어 요청 기준으로 재사용) */
+  readonly requested: { readonly mode: ThumbMode; readonly count: ThumbCount }
   /** 지금까지 발행한 이벤트 (늦게 구독한 쪽에 먼저 보낸다) */
   readonly history: Ref.Ref<ReadonlyArray<SourceEvent>>
   readonly pubsub: PubSub.PubSub<SourceEvent>
@@ -51,7 +61,12 @@ export class Jobs extends Context.Service<
     readonly open: (input: {
       readonly id: string
       readonly count: ThumbCount
-    }) => Effect.Effect<SourceInfo, FileNotFound | NotAVideo | FfmpegTimeout>
+      /** 기본 'even'. 'scene'이면 장면 전환 시점에서 고른다 (F3-7) */
+      readonly mode?: ThumbMode
+    }) => Effect.Effect<
+      SourceInfo,
+      FileNotFound | NotAVideo | FfmpegTimeout | ExtractFailed
+    >
     /** 소스의 이벤트 스트림. 이미 발행된 이벤트부터 보내고 `done`에서 끝난다.
      *  열린 소스가 아니면 FileNotFound (클라이언트는 open을 다시 호출) */
     readonly events: (
@@ -86,6 +101,8 @@ export class Jobs extends Context.Service<
       const running = yield* FiberHandle.make<void, never>()
       // open은 한 번에 하나씩 (같은 소스를 동시에 열어도 작업이 하나만 생기도록)
       const opening = yield* Semaphore.make(1)
+      // 장면 분석도 한 번에 하나씩 (dev StrictMode의 중복 호출은 두 번째가 캐시를 읽는다)
+      const analyzing = yield* Semaphore.make(1)
 
       const publish = (job: Job, event: SourceEvent) =>
         job.lock.withPermit(
@@ -184,29 +201,74 @@ export class Jobs extends Context.Service<
         return meta
       })
 
-      const openUnsafe = Effect.fn('Jobs.open')(function* (input: {
+      /** 장면 전환 후보. 캐시(scenes.json)에 없을 때만 분석한다 */
+      const sceneCuts = (id: string, file: string) =>
+        Effect.gen(function* () {
+          const cached = yield* cache.readScenes(id)
+          if (Option.isSome(cached)) return cached.value
+          const cuts = yield* ffmpeg.scenes(file)
+          yield* cache.writeScenes(id, cuts)
+          return cuts
+        }).pipe(analyzing.withPermit)
+
+      type OpenInput = {
         readonly id: string
         readonly count: ThumbCount
-      }) {
-        const existing = yield* Ref.get(current)
-        if (
-          Option.isSome(existing) &&
-          existing.value.info.id === input.id &&
-          existing.value.info.range === undefined &&
-          existing.value.info.times.length === input.count
-        ) {
-          return existing.value.info
-        }
+        readonly mode?: ThumbMode
+      }
+
+      /** 같은 소스·개수·방식의 전체 세트가 이미 있으면 그것 */
+      const reusable = (input: OpenInput) =>
+        Ref.get(current).pipe(
+          Effect.map((existing) =>
+            Option.filter(
+              existing,
+              (job) =>
+                job.info.id === input.id &&
+                job.info.range === undefined &&
+                job.requested.mode === (input.mode ?? 'even') &&
+                job.requested.count === input.count,
+            ),
+          ),
+        )
+
+      const openUnsafe = Effect.fn('Jobs.open')(function* (
+        input: OpenInput,
+        cuts: ReadonlyArray<SceneCut> | undefined,
+      ) {
+        const existing = yield* reusable(input)
+        if (Option.isSome(existing)) return existing.value.info
 
         const file = yield* library.resolve(input.id)
         const meta = yield* loadMeta(input.id, file)
+        const scenes =
+          cuts === undefined ? [] : pickScenes(cuts, input.count, meta.duration)
+        // 장면 모드인데 전환을 하나도 못 찾으면 균등 분할로 대신한다
+        const mode: ThumbMode = scenes.length > 0 ? 'scene' : 'even'
         return yield* start({
           id: input.id,
           file,
           meta,
-          times: thumbnailTimes(meta.duration, input.count),
+          requested: { mode: input.mode ?? 'even', count: input.count },
+          mode,
+          times:
+            mode === 'scene'
+              ? scenes
+              : thumbnailTimes(meta.duration, input.count),
+          ...(cuts === undefined ? {} : { sceneCuts: cuts.length }),
         })
       })
+
+      const open = (input: OpenInput) =>
+        Effect.gen(function* () {
+          // 장면 분석은 오래 걸릴 수 있어 open 잠금 밖에서 한다 (그동안 다른 소스도 열 수 있게)
+          let cuts: ReadonlyArray<SceneCut> | undefined
+          if (input.mode === 'scene' && Option.isNone(yield* reusable(input))) {
+            const file = yield* library.resolve(input.id)
+            cuts = yield* sceneCuts(input.id, file)
+          }
+          return yield* opening.withPermit(openUnsafe(input, cuts))
+        })
 
       /** 새 세트를 등록하고 생성을 시작한다. 이전 작업은 FiberHandle이 인터럽트한다 */
       const start = Effect.fn('Jobs.start')(function* (input: {
@@ -214,6 +276,9 @@ export class Jobs extends Context.Service<
         readonly file: string
         readonly meta: VideoMeta
         readonly times: ReadonlyArray<number>
+        readonly requested: Job['requested']
+        readonly mode: ThumbMode
+        readonly sceneCuts?: number
         readonly range?: { readonly from: number; readonly to: number }
       }) {
         const setId = `s${yield* Ref.getAndUpdate(nextSet, (n) => n + 1)}`
@@ -224,9 +289,14 @@ export class Jobs extends Context.Service<
             name: path.basename(input.file),
             setId,
             times: input.times,
+            mode: input.mode,
+            ...(input.sceneCuts === undefined
+              ? {}
+              : { sceneCuts: input.sceneCuts }),
             ...(input.range ? { range: input.range } : {}),
           },
           file: input.file,
+          requested: input.requested,
           history: yield* Ref.make<ReadonlyArray<SourceEvent>>([]),
           pubsub: yield* PubSub.unbounded<SourceEvent>(),
           lock: yield* Semaphore.make(1),
@@ -277,6 +347,8 @@ export class Jobs extends Context.Service<
           file: job.file,
           meta,
           times: rangeTimes(from, to, count),
+          requested: { mode: job.requested.mode, count },
+          mode: job.info.mode,
           range: { from, to },
         })
       })
@@ -308,11 +380,6 @@ export class Jobs extends Context.Service<
         yield* replace(job, result)
         return result
       })
-
-      const open = (input: {
-        readonly id: string
-        readonly count: ThumbCount
-      }) => opening.withPermit(openUnsafe(input))
 
       const events = (id: string) => Effect.map(currentFor(id), subscribe)
 

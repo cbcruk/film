@@ -19,6 +19,7 @@ import type {
   FrameFormat,
   SourceInfo,
   ThumbCount,
+  ThumbMode,
 } from '../lib/types.ts'
 
 const COUNTS: ReadonlyArray<ThumbCount> = [6, 12, 24, 48]
@@ -26,8 +27,10 @@ const COUNTS: ReadonlyArray<ThumbCount> = [6, 12, 24, 48]
 interface Search {
   /** 선택한 영상 ID */
   readonly v?: string
-  /** 썸네일 개수 */
+  /** 썸네일 개수 (장면 모드에서는 최대 개수) */
   readonly n: ThumbCount
+  /** 장면 모드 (없으면 균등 분할) */
+  readonly m?: 'scene'
 }
 
 const toErrorBody = (error: unknown): ErrorBody =>
@@ -42,7 +45,11 @@ export const Route = createFileRoute('/')({
         ? search.v
         : undefined
     const n = COUNTS.find((c) => c === Number(search.n)) ?? 12
-    return v === undefined ? { n } : { v, n }
+    return {
+      n,
+      ...(v === undefined ? {} : { v }),
+      ...(search.m === 'scene' ? { m: 'scene' as const } : {}),
+    }
   },
   loader: async () => {
     const health = await getHealth()
@@ -113,11 +120,18 @@ function HomePage() {
           <p className="empty">왼쪽 목록에서 영상을 고르세요</p>
         ) : (
           <SourcePanel
-            key={`${search.v}-${search.n}`}
+            key={`${search.v}-${search.n}-${search.m ?? 'even'}`}
             id={search.v}
             count={search.n}
+            mode={search.m ?? 'even'}
             formats={health.formats}
             onCount={(n) => navigate({ search: (s) => ({ ...s, n }) })}
+            onMode={(mode) =>
+              navigate({
+                search: ({ m: _, ...s }) =>
+                  mode === 'scene' ? { ...s, m: 'scene' as const } : s,
+              })
+            }
             onMissing={refresh}
             onOpened={addRecent}
           />
@@ -135,14 +149,16 @@ type OpenState =
 function SourcePanel(props: {
   readonly id: string
   readonly count: ThumbCount
+  readonly mode: ThumbMode
   readonly formats: ReadonlyArray<FrameFormat>
   readonly onCount: (n: ThumbCount) => void
+  readonly onMode: (mode: ThumbMode) => void
   /** 파일이 사라졌을 때 목록을 다시 읽는다 */
   readonly onMissing: () => void
   /** 열기에 성공하면 최근 목록에 넣는다 */
   readonly onOpened: (id: string) => void
 }) {
-  const { id, count } = props
+  const { id, count, mode } = props
   const [state, setState] = useState<OpenState>({ status: 'loading' })
   // 서버가 소스를 잃어버리면(재시작 등) 한 번 다시 연다
   const [attempt, setAttempt] = useState(0)
@@ -150,7 +166,7 @@ function SourcePanel(props: {
   useEffect(() => {
     let active = true
     setState({ status: 'loading' })
-    openSource({ data: { id, count } }).then(
+    openSource({ data: { id, count, mode } }).then(
       (info) => {
         if (!active) return
         setState({ status: 'ready', info })
@@ -162,9 +178,15 @@ function SourcePanel(props: {
     return () => {
       active = false
     }
-  }, [id, count, attempt])
+  }, [id, count, mode, attempt])
 
-  if (state.status === 'loading') return <p className="empty">여는 중…</p>
+  if (state.status === 'loading') {
+    return mode === 'scene' ? (
+      <SceneAnalyzing />
+    ) : (
+      <p className="empty">여는 중…</p>
+    )
+  }
   if (state.status === 'error') {
     const { code, message } = state.error
     return (
@@ -187,17 +209,40 @@ function SourcePanel(props: {
   return (
     <SourceView
       info={state.info}
+      count={count}
+      mode={mode}
       formats={props.formats}
       onCount={props.onCount}
+      onMode={props.onMode}
       onLost={() => attempt === 0 && setAttempt(1)}
     />
   )
 }
 
+/** 장면 분석은 영상 전체를 읽으므로 경과 시간을 보여준다 (분석 결과는 캐시되어 두 번째부터는 즉시) */
+function SceneAnalyzing() {
+  const [seconds, setSeconds] = useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setSeconds((s) => s + 1), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  return (
+    <p className="empty">
+      장면 전환을 찾는 중… {seconds > 0 && `${seconds}초`}
+      <br />
+      처음 한 번은 영상 전체를 읽습니다 (4분 1080p 기준 수 초)
+    </p>
+  )
+}
+
 function SourceView(props: {
   readonly info: SourceInfo
+  /** 요청한 개수·방식 (장면 모드는 실제 장수가 더 적을 수 있다) */
+  readonly count: ThumbCount
+  readonly mode: ThumbMode
   readonly formats: ReadonlyArray<FrameFormat>
   readonly onCount: (n: ThumbCount) => void
+  readonly onMode: (mode: ThumbMode) => void
   readonly onLost: () => void
 }) {
   // 구간 재생성·전체 보기로 세트가 바뀐다. 처음 연 세트는 props.info
@@ -257,7 +302,7 @@ function SourceView(props: {
             createSet({
               data: {
                 id: info.id,
-                count: info.times.length as ThumbCount,
+                count: props.count,
                 from,
                 to,
               },
@@ -268,7 +313,7 @@ function SourceView(props: {
   const backToFull = () =>
     run(() =>
       openSource({
-        data: { id: info.id, count: info.times.length as ThumbCount },
+        data: { id: info.id, count: props.count, mode: props.mode },
       }),
     )
 
@@ -323,10 +368,24 @@ function SourceView(props: {
           {formatTimecode(info.duration)} · {info.width}×{info.height} ·{' '}
           {info.fps} fps · {info.codec}
         </p>
+        <span className="modes" role="radiogroup" aria-label="썸네일 방식">
+          {(['even', 'scene'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={props.mode === m}
+              onClick={() => props.onMode(m)}
+              disabled={busy}
+            >
+              {m === 'even' ? '균등' : '장면'}
+            </button>
+          ))}
+        </span>
         <label className="count">
           썸네일
           <select
-            value={info.times.length}
+            value={props.count}
             onChange={(e) =>
               props.onCount(Number(e.target.value) as ThumbCount)
             }
@@ -347,6 +406,13 @@ function SourceView(props: {
         <span className="progress-text">
           {events.finished ? '완료' : `${events.done}/${events.total}`}
         </span>
+        {props.mode === 'scene' && info.range === undefined && (
+          <span className="scene-note">
+            {info.mode === 'even'
+              ? '장면 전환을 찾지 못해 균등 분할로 보여줍니다'
+              : `장면 전환 ${info.sceneCuts ?? 0}곳 중 ${info.times.length}장`}
+          </span>
+        )}
         {info.range && (
           <span className="range">
             구간 {formatTimecode(info.range.from)} ~{' '}

@@ -37,6 +37,29 @@ export default function setup() {
     '-c',
     'copy',
   ])
+  // 2초마다 장면이 바뀌는 영상 (단색 → 단색 → 패턴 → 단색): 전환 2·4·6초
+  ffmpeg('scenes.mp4', [
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=red:s=320x180:r=30:d=2',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=blue:s=320x180:r=30:d=2',
+    '-f',
+    'lavfi',
+    '-i',
+    'testsrc2=s=320x180:r=30:d=2',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=yellow:s=320x180:r=30:d=2',
+    '-filter_complex',
+    '[0][1][2][3]concat=n=4:v=1:a=0,format=yuv420p',
+    '-c:v',
+    'libx264',
+  ])
   ffmpeg('audio-only.mp4', [
     '-f',
     'lavfi',

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { assert, describe, it } from '@effect/vitest'
 import { Duration, Effect, Stream } from 'effect'
-import { Ffmpeg } from '../src/server/ffmpeg.ts'
+import { Ffmpeg, parseScenes } from '../src/server/ffmpeg.ts'
 import { ffmpegLive, fixture } from './support/layers.ts'
 
 /** 해당 파일을 인자로 받은 ffmpeg/ffprobe가 아직 떠 있는지 */
@@ -117,6 +117,42 @@ describe('Ffmpeg.probe', () => {
       yield* Effect.sleep('200 millis')
       assert.isFalse(runningFor(fixture('h264.mp4')))
     }).pipe(Effect.provide(ffmpegLive({ ffmpegTimeout: Duration.millis(1) }))),
+  )
+})
+
+describe('Ffmpeg.scenes', () => {
+  it('metadata=print 출력을 읽는다', () => {
+    assert.deepStrictEqual(
+      parseScenes(
+        'frame:0    pts:3917    pts_time:3.917\nlavfi.scene_score=0.238298\n' +
+          'frame:1    pts:7000    pts_time:7\nlavfi.scene_score=0.414858\n',
+      ),
+      [
+        { t: 3.917, score: 0.238298 },
+        { t: 7, score: 0.414858 },
+      ],
+    )
+    assert.deepStrictEqual(parseScenes(''), [])
+  })
+
+  it.live('2·4·6초의 장면 전환을 찾는다', () =>
+    Effect.gen(function* () {
+      const cuts = yield* (yield* Ffmpeg).scenes(fixture('scenes.mp4'))
+      const strong = cuts.filter((c) => c.score > 0.3).map((c) => c.t)
+      assert.strictEqual(strong.length, 3)
+      for (const [i, expected] of [2, 4, 6].entries()) {
+        assert.closeTo(strong[i]!, expected, 0.05)
+      }
+    }).pipe(Effect.provide(ffmpegLive())),
+  )
+
+  it.live('영상이 아니면 ExtractFailed', () =>
+    Effect.gen(function* () {
+      const error = yield* (yield* Ffmpeg)
+        .scenes(fixture('not-a-video.mp4'))
+        .pipe(Effect.flip)
+      assert.strictEqual(error._tag, 'ExtractFailed')
+    }).pipe(Effect.provide(ffmpegLive())),
   )
 })
 

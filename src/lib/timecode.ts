@@ -18,6 +18,34 @@ export const rangeTimes = (from: number, to: number, count: number) =>
     Number(timeKey(from + ((to - from) * (i + 1)) / (count + 1))),
   )
 
+export interface SceneCut {
+  readonly t: number
+  readonly score: number
+}
+
+/**
+ * 장면 전환 후보에서 count개를 고른다 (F3-7).
+ * 점수가 높은 순으로 고르되, 이미 고른 것과 duration / (count × 4)보다 가까우면 건너뛴다
+ * (빠른 컷이 몰린 구간에 다 몰리지 않도록). 결과는 시간순, 밀리초 반올림.
+ * 후보가 적으면 찾은 만큼만 돌려준다.
+ */
+export const pickScenes = (
+  cuts: ReadonlyArray<SceneCut>,
+  count: number,
+  duration: number,
+): ReadonlyArray<number> => {
+  const gap = duration / (count * 4)
+  const picked: Array<number> = []
+  for (const cut of [...cuts].sort((a, b) => b.score - a.score)) {
+    if (picked.length >= count) break
+    if (cut.t >= duration) continue
+    if (picked.every((t) => Math.abs(t - cut.t) >= gap)) picked.push(cut.t)
+  }
+  return [...new Set(picked.map((t) => Number(timeKey(t))))].sort(
+    (a, b) => a - b,
+  )
+}
+
 const pad = (n: number, width = 2) => String(n).padStart(width, '0')
 
 const split = (t: number) => {

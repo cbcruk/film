@@ -11,18 +11,27 @@ export interface FakeOptions {
   /** 이 시점이면 ExtractFailed */
   readonly failWhen?: (t: number) => boolean
   readonly duration?: number
+  /** scenes()가 돌려줄 전환 후보 */
+  readonly scenes?: ReadonlyArray<{ t: number; score: number }>
 }
 
 /** 호출 기록. 테스트에서 동시 실행 수·취소 여부를 확인한다 */
 export interface FakeStats {
   calls: number
+  sceneCalls: number
   active: number
   maxActive: number
   interrupted: number
 }
 
 export const ffmpegFake = (options: FakeOptions = {}) => {
-  const stats: FakeStats = { calls: 0, active: 0, maxActive: 0, interrupted: 0 }
+  const stats: FakeStats = {
+    calls: 0,
+    sceneCalls: 0,
+    active: 0,
+    maxActive: 0,
+    interrupted: 0,
+  }
 
   const thumbnail = (_file: string, t: number, out: string) =>
     Effect.gen(function* () {
@@ -64,6 +73,11 @@ export const ffmpegFake = (options: FakeOptions = {}) => {
         }),
       thumbnail,
       frame: () => Stream.empty,
+      scenes: () =>
+        Effect.sync(() => {
+          stats.sceneCalls++
+          return options.scenes ?? []
+        }),
     }),
   )
   return { layer, stats }

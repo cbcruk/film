@@ -9,7 +9,7 @@ import {
   Schedule,
   Schema,
 } from 'effect'
-import { timeKey } from '../lib/timecode.ts'
+import { type SceneCut, timeKey } from '../lib/timecode.ts'
 import { AppConfig } from './config.ts'
 
 const CachedMeta = Schema.Struct({
@@ -25,7 +25,14 @@ const CachedMeta = Schema.Struct({
 export type CachedMeta = typeof CachedMeta.Type
 const decodeMeta = Schema.decodeUnknownEffect(Schema.fromJsonString(CachedMeta))
 
+const decodeScenes = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Array(Schema.Struct({ t: Schema.Number, score: Schema.Number })),
+  ),
+)
+
 const META = 'meta.json'
+const SCENES = 'scenes.json'
 
 /**
  * ~/.cache/film/{sourceId}/ 관리.
@@ -43,6 +50,14 @@ export class Cache extends Context.Service<
     /** 저장된 probe 결과. 읽으면서 접근 시각을 갱신한다 (용량 정리 순서) */
     readonly readMeta: (id: string) => Effect.Effect<Option.Option<CachedMeta>>
     readonly writeMeta: (id: string, value: CachedMeta) => Effect.Effect<void>
+    /** 장면 분석 결과 (영상 전체를 읽어 오래 걸리므로 저장해 둔다) */
+    readonly readScenes: (
+      id: string,
+    ) => Effect.Effect<Option.Option<ReadonlyArray<SceneCut>>>
+    readonly writeScenes: (
+      id: string,
+      cuts: ReadonlyArray<SceneCut>,
+    ) => Effect.Effect<void>
     /** 총 용량이 한도를 넘으면 오래 안 연 소스부터 지운다 */
     readonly cleanup: Effect.Effect<void>
   }
@@ -77,13 +92,29 @@ export class Cache extends Context.Service<
           Effect.option,
         )
 
+      const readScenes = (id: string) =>
+        fs
+          .readFileString(path.join(dirOf(id), SCENES))
+          .pipe(Effect.flatMap(decodeScenes), Effect.option)
+
+      /** 임시 파일에 쓴 뒤 rename (동시에 써도 겹치지 않도록 이름을 매번 다르게) */
+      const writeJson = (file: string, value: unknown) =>
+        Effect.gen(function* () {
+          const tmp = `${file}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`
+          yield* fs.writeFileString(tmp, JSON.stringify(value))
+          yield* fs.rename(tmp, file)
+        })
+
+      const writeScenes = (id: string, cuts: ReadonlyArray<SceneCut>) =>
+        prepare(id).pipe(
+          Effect.andThen(writeJson(path.join(dirOf(id), SCENES), cuts)),
+          Effect.orDie,
+        )
+
       const writeMeta = (id: string, value: CachedMeta) =>
         Effect.gen(function* () {
           yield* prepare(id)
-          // 동시에 써도 겹치지 않도록 임시 파일 이름을 매번 다르게
-          const tmp = `${metaOf(id)}.${process.pid}-${Math.random().toString(36).slice(2)}.tmp`
-          yield* fs.writeFileString(tmp, JSON.stringify(value))
-          yield* fs.rename(tmp, metaOf(id))
+          yield* writeJson(metaOf(id), value)
         }).pipe(Effect.orDie)
 
       const cleanup = Effect.gen(function* () {
@@ -145,6 +176,8 @@ export class Cache extends Context.Service<
         exists,
         readMeta,
         writeMeta,
+        readScenes,
+        writeScenes,
         cleanup,
       })
     }),

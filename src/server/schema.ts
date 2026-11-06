@@ -17,9 +17,12 @@ export const SecondsFromString = Schema.String.check(
   ),
 )
 
+export const ThumbMode = Schema.Literals(['even', 'scene'])
+
 export const OpenSourceInput = Schema.Struct({
   id: SourceId,
   count: ThumbCount,
+  mode: Schema.optionalKey(ThumbMode),
 })
 
 /** 초 단위 시점 (JSON 숫자) */

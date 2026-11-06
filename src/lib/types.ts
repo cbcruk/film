@@ -51,12 +51,19 @@ export interface VideoList {
 
 export type ThumbCount = 6 | 12 | 24 | 48
 
+/** 썸네일 시점을 고르는 방식: 균등 분할 / 장면 전환 */
+export type ThumbMode = 'even' | 'scene'
+
 /** openSource 결과. times는 세트의 시점 목록 (스켈레톤 카드·타임코드 표시용) */
 export interface SourceInfo extends VideoMeta {
   readonly id: string
   readonly name: string
   readonly setId: string
   readonly times: ReadonlyArray<number>
+  /** 실제로 쓴 방식. 장면 모드인데 전환을 못 찾으면 'even'으로 대신한다 */
+  readonly mode: ThumbMode
+  /** 장면 모드에서 찾은 전환 후보 수 (요청 개수보다 적을 수 있음) */
+  readonly sceneCuts?: number
   /** 구간 재생성 세트면 그 구간 (전체 세트면 없음) */
   readonly range?: { readonly from: number; readonly to: number }
 }

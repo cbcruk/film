@@ -420,3 +420,26 @@ button {
   gap: 8px;
   color: var(--accent);
 }
+
+/* M6: 균등 / 장면 */
+.modes {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.modes button {
+  padding: 3px 10px;
+  border: 0;
+  background: none;
+}
+
+.modes button[aria-checked='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.scene-note {
+  color: var(--muted);
+}

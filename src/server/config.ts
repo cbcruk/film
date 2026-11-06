@@ -21,6 +21,8 @@ export class AppConfig extends Context.Service<
     readonly cacheDir: string
     readonly concurrency: number
     readonly ffmpegTimeout: Duration.Duration
+    /** 장면 분석은 영상 전체를 디코딩하므로 따로 길게 (4K 대비) */
+    readonly sceneTimeout: Duration.Duration
     /** 캐시 총 용량 한도. 넘으면 오래 안 연 소스부터 지운다 */
     readonly cacheMaxBytes: number
   }
@@ -36,6 +38,7 @@ export class AppConfig extends Context.Service<
         cacheDir: path.join(os.homedir(), '.cache', 'film'),
         concurrency: Math.max(1, Math.floor(os.availableParallelism() / 2)),
         ffmpegTimeout: Duration.seconds(30),
+        sceneTimeout: Duration.minutes(3),
         cacheMaxBytes: 1024 ** 3,
       })
     }),

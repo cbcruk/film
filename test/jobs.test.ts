@@ -323,6 +323,73 @@ describe('Jobs', () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.live('장면 모드: 전환 시점에서 고르고, 분석 결과는 캐시한다', () => {
+    const dirs = makeDirs()
+    const scenes = [
+      { t: 12.5, score: 0.9 },
+      { t: 40, score: 0.6 },
+      { t: 77.25, score: 0.4 },
+    ]
+    const first = setup(dirs, { scenes })
+    const second = setup(dirs, { scenes })
+    return Effect.gen(function* () {
+      const run = Effect.gen(function* () {
+        const { a } = yield* ids
+        const jobs = yield* Jobs
+        const info = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+        yield* collectEvents(a)
+        const again = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+        assert.strictEqual(again.setId, info.setId)
+        const even = yield* jobs.open({ id: a, count: 6 })
+        assert.notStrictEqual(even.setId, info.setId)
+        assert.strictEqual(even.mode, 'even')
+        return info
+      })
+      const info = yield* run.pipe(Effect.provide(first.layer))
+      assert.strictEqual(info.mode, 'scene')
+      assert.strictEqual(info.sceneCuts, 3)
+      assert.deepStrictEqual(info.times, [12.5, 40, 77.25])
+      assert.strictEqual(first.stats.sceneCalls, 1)
+
+      yield* run.pipe(Effect.provide(second.layer))
+      assert.strictEqual(second.stats.sceneCalls, 0) // scenes.json
+    })
+  })
+
+  it.live('장면 모드: 전환이 없으면 균등 분할로 대신한다', () => {
+    const { layer } = setup(makeDirs(), { scenes: [] })
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      const info = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+      assert.strictEqual(info.mode, 'even')
+      assert.strictEqual(info.sceneCuts, 0)
+      assert.strictEqual(info.times.length, 6)
+      // 같은 요청이면 대신한 세트를 그대로 쓴다
+      const again = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+      assert.strictEqual(again.setId, info.setId)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live('장면 모드: 동시에 열어도 분석은 한 번', () => {
+    const { layer, stats } = setup(makeDirs(), {
+      scenes: [{ t: 50, score: 1 }],
+    })
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      const [x, y] = yield* Effect.all(
+        [
+          jobs.open({ id: a, count: 6, mode: 'scene' }),
+          jobs.open({ id: a, count: 6, mode: 'scene' }),
+        ],
+        { concurrency: 'unbounded' },
+      )
+      assert.strictEqual(x.setId, y.setId)
+      assert.strictEqual(stats.sceneCalls, 1)
+    }).pipe(Effect.provide(layer))
+  })
+
   it.live('모르는 ID는 FileNotFound', () => {
     const { layer } = setup(makeDirs())
     return Effect.gen(function* () {

@@ -10,6 +10,7 @@ import {
   String,
 } from 'effect'
 import { ChildProcess, ChildProcessSpawner } from 'effect/process'
+import type { SceneCut } from '../lib/timecode.ts'
 import type { FrameFormat, VideoMeta } from '../lib/types.ts'
 import { AppConfig } from './config.ts'
 import {
@@ -36,6 +37,10 @@ export class Ffmpeg extends Context.Service<
       t: number,
       out: string,
     ) => Effect.Effect<void, ExtractFailed | FfmpegTimeout>
+    /** 장면 전환 후보 (점수 > 0.2). 영상 전체를 읽으므로 타임아웃은 sceneTimeout */
+    readonly scenes: (
+      file: string,
+    ) => Effect.Effect<ReadonlyArray<SceneCut>, ExtractFailed | FfmpegTimeout>
     /** t초 지점 원본 해상도 프레임. ffmpeg stdout을 그대로 흘려보낸다. 스트림이 끝나거나 중단되면 프로세스 종료.
      *  format은 formats에 있는 것이어야 한다 (호출 전 검증) */
     readonly frame: (
@@ -50,15 +55,19 @@ export class Ffmpeg extends Context.Service<
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
       const fs = yield* FileSystem.FileSystem
-      const { ffmpegTimeout } = yield* AppConfig
+      const { ffmpegTimeout, sceneTimeout } = yield* AppConfig
 
-      const timeoutError = (cmd: string) =>
+      const timeoutError = (cmd: string, limit = ffmpegTimeout) =>
         new FfmpegTimeout({
-          message: `${cmd}가 ${ffmpegTimeout} 안에 끝나지 않았습니다`,
+          message: `${cmd}가 ${limit} 안에 끝나지 않았습니다`,
         })
 
       /** 실행 후 stdout·stderr를 모아서 종료 코드와 함께 돌려준다. 타임아웃 시 프로세스 kill */
-      const run = (cmd: string, args: ReadonlyArray<string>) =>
+      const run = (
+        cmd: string,
+        args: ReadonlyArray<string>,
+        limit = ffmpegTimeout,
+      ) =>
         Effect.scoped(
           Effect.gen(function* () {
             const handle = yield* spawner.spawn(ChildProcess.make(cmd, args))
@@ -74,8 +83,8 @@ export class Ffmpeg extends Context.Service<
           }),
         ).pipe(
           Effect.timeoutOrElse({
-            duration: ffmpegTimeout,
-            orElse: () => Effect.fail(timeoutError(cmd)),
+            duration: limit,
+            orElse: () => Effect.fail(timeoutError(cmd, limit)),
           }),
         )
 
@@ -267,7 +276,45 @@ export class Ffmpeg extends Context.Service<
         )
       }
 
-      return Ffmpeg.of({ checkInstalled, formats, probe, thumbnail, frame })
+      const scenes = Effect.fn('Ffmpeg.scenes')(function* (file: string) {
+        const failed = (detail: string) =>
+          new ExtractFailed({ message: `장면 분석 실패: ${detail}`, t: 0 })
+        // 영상 전체를 디코딩하므로 320px로 줄인 뒤 점수를 매긴다 (4분 960×720 AV1 ≈ 4초)
+        const result = yield* run(
+          'ffmpeg',
+          [
+            '-v',
+            'error',
+            '-an',
+            '-sn',
+            '-i',
+            file,
+            '-vf',
+            `scale=320:-2,select='gt(scene,${SCENE_THRESHOLD})',metadata=print:file=-`,
+            '-f',
+            'null',
+            '-',
+          ],
+          sceneTimeout,
+        ).pipe(
+          Effect.catchTag('PlatformError', (e) =>
+            Effect.fail(failed(e.message)),
+          ),
+        )
+        if (result.exitCode !== 0) {
+          return yield* failed(result.stderr || `exit ${result.exitCode}`)
+        }
+        return parseScenes(result.stdout)
+      })
+
+      return Ffmpeg.of({
+        checkInstalled,
+        formats,
+        probe,
+        thumbnail,
+        frame,
+        scenes,
+      })
     }),
   )
 }
@@ -314,4 +361,27 @@ const encoderArgs: Record<FrameFormat, ReadonlyArray<string>> = {
   png: ['-c:v', 'png'],
   jpg: ['-c:v', 'mjpeg', '-q:v', '2'],
   webp: ['-c:v', 'libwebp', '-quality', '90'],
+}
+
+/** 장면 전환 후보 기준. 실제 뮤직비디오에서 0.2 초과 ≈ 하드 컷 (M6 측정: 4분 영상 102개) */
+const SCENE_THRESHOLD = 0.2
+
+/**
+ * metadata=print 출력 파싱:
+ *   frame:0    pts:3917    pts_time:3.917
+ *   lavfi.scene_score=0.238298
+ */
+export const parseScenes = (stdout: string): ReadonlyArray<SceneCut> => {
+  const cuts: Array<SceneCut> = []
+  let t: number | undefined
+  for (const line of stdout.split('\n')) {
+    const time = /pts_time:([\d.]+)/.exec(line)
+    if (time) t = Number(time[1])
+    const score = /lavfi\.scene_score=([\d.]+)/.exec(line)
+    if (score && t !== undefined) {
+      cuts.push({ t, score: Number(score[1]) })
+      t = undefined
+    }
+  }
+  return cuts
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatTimecode,
+  pickScenes,
   rangeTimes,
   frameFilename,
   frameUrl,
@@ -20,6 +21,21 @@ describe('timecode', () => {
   it('구간 분할은 양 끝을 뺀다', () => {
     expect(rangeTimes(10, 17, 6)).toEqual([11, 12, 13, 14, 15, 16])
     expect(rangeTimes(0, 1, 2)).toEqual([0.333, 0.667])
+  })
+
+  it('장면 선택: 점수 높은 순, 최소 간격, 시간순', () => {
+    const cuts = [
+      { t: 10, score: 0.9 },
+      { t: 10.5, score: 0.8 }, // 10과 너무 가까움 (간격 100 / (3*4) = 8.3)
+      { t: 50, score: 0.5 },
+      { t: 80, score: 0.7 },
+      { t: 30, score: 0.3 },
+    ]
+    expect(pickScenes(cuts, 3, 100)).toEqual([10, 50, 80])
+    expect(pickScenes(cuts, 10, 100)).toEqual([10, 30, 50, 80])
+    expect(pickScenes([], 6, 100)).toEqual([])
+    expect(pickScenes([{ t: 100, score: 1 }], 6, 100)).toEqual([])
+    expect(pickScenes([{ t: 1.23456, score: 1 }], 6, 100)).toEqual([1.235])
   })
 
   it('타임코드 표기', () => {
