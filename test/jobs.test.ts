@@ -53,10 +53,11 @@ describe('Jobs', () => {
     const { layer, stats } = setup(makeDirs())
     return Effect.gen(function* () {
       const { a } = yield* ids
-      const info = yield* (yield* Jobs).open({ id: a, count: 12 })
+      const info = yield* (yield* Jobs).open({ id: a, interval: 10 })
       assert.strictEqual(info.times.length, 12)
-      assert.strictEqual(info.times[0], 2)
-      assert.strictEqual(info.times[11], 98)
+      // 120초 영상, 10초 간격 → 0, 10, …, 110
+      assert.strictEqual(info.times[0], 0)
+      assert.strictEqual(info.times[11], 110)
       assert.strictEqual(info.name, 'a.mp4')
 
       const events = yield* collectEvents(a)
@@ -86,11 +87,11 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const { a } = yield* ids
       const jobs = yield* Jobs
-      yield* jobs.open({ id: a, count: 6 })
+      yield* jobs.open({ id: a, interval: 30 })
       const early = yield* collectEvents(a) // 끝날 때까지
       const late = yield* collectEvents(a) // 끝난 뒤 구독
       assert.deepStrictEqual(late, early)
-      assert.strictEqual(late.length, 6 + 6 + 1)
+      assert.strictEqual(late.length, 4 + 4 + 1) // 30초 간격 → 4장
     }).pipe(Effect.provide(layer))
   })
 
@@ -98,7 +99,7 @@ describe('Jobs', () => {
     const { layer } = setup(makeDirs(), { delay: '30 millis' })
     return Effect.gen(function* () {
       const { a } = yield* ids
-      yield* (yield* Jobs).open({ id: a, count: 12 })
+      yield* (yield* Jobs).open({ id: a, interval: 10 })
       yield* Effect.sleep('50 millis')
       const events = yield* collectEvents(a)
       assert.strictEqual(ofType(events, 'thumb').length, 12)
@@ -115,7 +116,7 @@ describe('Jobs', () => {
       const { a } = yield* ids
       const jobs = yield* Jobs
       for (let round = 0; round < 5; round++) {
-        yield* jobs.open({ id: a, count: round % 2 === 0 ? 24 : 48 })
+        yield* jobs.open({ id: a, interval: round % 2 === 0 ? 5 : 2 })
         // 느리게 읽는 구독자 (브라우저 연결처럼 소비가 발행보다 늦는 경우)
         const slow = Effect.gen(function* () {
           const stream = yield* jobs.events(a)
@@ -142,12 +143,12 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const { a, b } = yield* ids
       const jobs = yield* Jobs
-      yield* jobs.open({ id: a, count: 12 })
+      yield* jobs.open({ id: a, interval: 10 })
       const oldEvents = yield* collectEvents(a).pipe(Effect.forkChild)
       yield* Effect.sleep('30 millis')
       assert.strictEqual(stats.active, 2)
 
-      yield* jobs.open({ id: b, count: 6 })
+      yield* jobs.open({ id: b, interval: 30 })
       yield* Effect.sleep('30 millis')
       assert.strictEqual(stats.interrupted, 2)
       assert.strictEqual(stats.active, 2) // b의 작업만 실행 중
@@ -160,18 +161,18 @@ describe('Jobs', () => {
     }).pipe(Effect.provide(layer))
   })
 
-  it.live('같은 소스·개수로 다시 열면 진행 중인 세트를 그대로 쓴다', () => {
+  it.live('같은 소스·간격으로 다시 열면 진행 중인 세트를 그대로 쓴다', () => {
     const { layer, stats } = setup(makeDirs())
     return Effect.gen(function* () {
       const { a } = yield* ids
       const jobs = yield* Jobs
-      const first = yield* jobs.open({ id: a, count: 6 })
-      const again = yield* jobs.open({ id: a, count: 6 })
+      const first = yield* jobs.open({ id: a, interval: 30 })
+      const again = yield* jobs.open({ id: a, interval: 30 })
       assert.strictEqual(again.setId, first.setId)
       yield* collectEvents(a)
-      assert.strictEqual(stats.calls, 6)
+      assert.strictEqual(stats.calls, 4)
 
-      const more = yield* jobs.open({ id: a, count: 12 })
+      const more = yield* jobs.open({ id: a, interval: 10 })
       assert.notStrictEqual(more.setId, first.setId)
     }).pipe(Effect.provide(layer))
   })
@@ -183,7 +184,7 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const run = Effect.gen(function* () {
         const { a } = yield* ids
-        yield* (yield* Jobs).open({ id: a, count: 12 })
+        yield* (yield* Jobs).open({ id: a, interval: 10 })
         return yield* collectEvents(a)
       })
       yield* run.pipe(Effect.provide(first.layer))
@@ -195,11 +196,11 @@ describe('Jobs', () => {
   })
 
   it.live('실패한 시점은 error 이벤트로 알리고 나머지는 계속한다', () => {
-    // 100초 영상, 12장 → 네 번째 시점은 2 + 96 * 3/11 = 28.182
-    const { layer } = setup(makeDirs(), { failWhen: (t) => t === 28.182 })
+    // 120초 영상, 10초 간격 → 네 번째 시점은 30초
+    const { layer } = setup(makeDirs(), { failWhen: (t) => t === 30 })
     return Effect.gen(function* () {
       const { a } = yield* ids
-      yield* (yield* Jobs).open({ id: a, count: 12 })
+      yield* (yield* Jobs).open({ id: a, interval: 10 })
       const events = yield* collectEvents(a)
       const errors = ofType(events, 'error')
       assert.strictEqual(errors.length, 1)
@@ -215,12 +216,15 @@ describe('Jobs', () => {
       const { a } = yield* ids
       const jobs = yield* Jobs
       const [x, y] = yield* Effect.all(
-        [jobs.open({ id: a, count: 6 }), jobs.open({ id: a, count: 6 })],
+        [
+          jobs.open({ id: a, interval: 30 }),
+          jobs.open({ id: a, interval: 30 }),
+        ],
         { concurrency: 'unbounded' },
       )
       assert.strictEqual(x.setId, y.setId)
       yield* collectEvents(a)
-      assert.strictEqual(stats.calls, 6)
+      assert.strictEqual(stats.calls, 4)
     }).pipe(Effect.provide(layer))
   })
 
@@ -229,7 +233,7 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const { a } = yield* ids
       const jobs = yield* Jobs
-      const full = yield* jobs.open({ id: a, count: 6 })
+      const full = yield* jobs.open({ id: a, interval: 30 })
       yield* collectEvents(a)
 
       const range = yield* jobs.createSet({ id: a, count: 6, from: 10, to: 17 })
@@ -240,8 +244,8 @@ describe('Jobs', () => {
       assert.strictEqual(ofType(events, 'thumb').length, 6)
       assert.isTrue(events.every((e) => e.setId === range.setId))
 
-      // 전체 세트로 돌아가기: 같은 개수라도 구간 세트를 재사용하지 않는다
-      const back = yield* jobs.open({ id: a, count: 6 })
+      // 전체 세트로 돌아가기: 구간 세트를 재사용하지 않는다
+      const back = yield* jobs.open({ id: a, interval: 30 })
       assert.isUndefined(back.range)
       assert.deepStrictEqual(back.times, full.times)
       const calls = stats.calls
@@ -257,12 +261,12 @@ describe('Jobs', () => {
       return Effect.gen(function* () {
         const { a, b } = yield* ids
         const jobs = yield* Jobs
-        yield* jobs.open({ id: a, count: 6 })
+        yield* jobs.open({ id: a, interval: 30 })
         for (const [from, to] of [
           [20, 10],
           [10, 10],
           [-1, 10],
-          [90, 101],
+          [110, 121],
           [10, 10.005],
         ] as const) {
           const error = yield* jobs
@@ -283,22 +287,22 @@ describe('Jobs', () => {
     () => {
       let broken = true
       const { layer } = setup(makeDirs(), {
-        failWhen: (t) => broken && t === 21.2,
+        failWhen: (t) => broken && t === 30,
       })
       return Effect.gen(function* () {
         const { a } = yield* ids
         const jobs = yield* Jobs
-        const info = yield* jobs.open({ id: a, count: 6 })
+        const info = yield* jobs.open({ id: a, interval: 30 })
         const first = yield* collectEvents(a)
         assert.include(ofType(first, 'error')[0]!, { index: 1 })
 
         broken = false
         const result = yield* jobs.retry({ id: a, setId: info.setId, index: 1 })
-        assert.include(result, { type: 'thumb', index: 1, t: 21.2 })
+        assert.include(result, { type: 'thumb', index: 1, t: 30 })
 
         const replay = yield* collectEvents(a)
         assert.strictEqual(ofType(replay, 'error').length, 0)
-        assert.strictEqual(ofType(replay, 'thumb').length, 6)
+        assert.strictEqual(ofType(replay, 'thumb').length, 4)
         assert.strictEqual(replay.at(-1)?.type, 'done')
       }).pipe(Effect.provide(layer))
     },
@@ -309,12 +313,12 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const { a } = yield* ids
       const jobs = yield* Jobs
-      const info = yield* jobs.open({ id: a, count: 6 })
+      const info = yield* jobs.open({ id: a, interval: 30 })
       const stale = yield* jobs
         .retry({ id: a, setId: 's999', index: 0 })
         .pipe(Effect.flip)
       assert.strictEqual(stale._tag, 'InvalidParam')
-      for (const index of [-1, 6, 1.5]) {
+      for (const index of [-1, 4, 1.5]) {
         const error = yield* jobs
           .retry({ id: a, setId: info.setId, index })
           .pipe(Effect.flip)
@@ -336,11 +340,11 @@ describe('Jobs', () => {
       const run = Effect.gen(function* () {
         const { a } = yield* ids
         const jobs = yield* Jobs
-        const info = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+        const info = yield* jobs.open({ id: a, interval: 10, mode: 'scene' })
         yield* collectEvents(a)
-        const again = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+        const again = yield* jobs.open({ id: a, interval: 10, mode: 'scene' })
         assert.strictEqual(again.setId, info.setId)
-        const even = yield* jobs.open({ id: a, count: 6 })
+        const even = yield* jobs.open({ id: a, interval: 30 })
         assert.notStrictEqual(even.setId, info.setId)
         assert.strictEqual(even.mode, 'even')
         return info
@@ -361,12 +365,31 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const { a } = yield* ids
       const jobs = yield* Jobs
-      const info = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+      const info = yield* jobs.open({ id: a, interval: 10, mode: 'scene' })
       assert.strictEqual(info.mode, 'even')
       assert.strictEqual(info.sceneCuts, 0)
-      assert.strictEqual(info.times.length, 6)
+      assert.strictEqual(info.times.length, 12) // 120초, 10초 간격
       // 같은 요청이면 대신한 세트를 그대로 쓴다
-      const again = yield* jobs.open({ id: a, count: 6, mode: 'scene' })
+      const again = yield* jobs.open({ id: a, interval: 10, mode: 'scene' })
+      assert.strictEqual(again.setId, info.setId)
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live('장면 모드: 개수와 상관없이 찾은 전환을 모두 보여준다', () => {
+    const scenes = Array.from({ length: 30 }, (_, i) => ({
+      t: 2 + i * 3,
+      score: 0.3,
+    }))
+    const { layer } = setup(makeDirs(), { scenes })
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      const info = yield* jobs.open({ id: a, interval: 10, mode: 'scene' })
+      assert.strictEqual(info.times.length, 30)
+      const events = yield* collectEvents(a)
+      assert.strictEqual(ofType(events, 'thumb').length, 30)
+      // 개수만 다른 요청이면 같은 세트
+      const again = yield* jobs.open({ id: a, interval: 2, mode: 'scene' })
       assert.strictEqual(again.setId, info.setId)
     }).pipe(Effect.provide(layer))
   })
@@ -380,8 +403,8 @@ describe('Jobs', () => {
       const jobs = yield* Jobs
       const [x, y] = yield* Effect.all(
         [
-          jobs.open({ id: a, count: 6, mode: 'scene' }),
-          jobs.open({ id: a, count: 6, mode: 'scene' }),
+          jobs.open({ id: a, interval: 10, mode: 'scene' }),
+          jobs.open({ id: a, interval: 10, mode: 'scene' }),
         ],
         { concurrency: 'unbounded' },
       )
@@ -394,7 +417,7 @@ describe('Jobs', () => {
     const { layer } = setup(makeDirs())
     return Effect.gen(function* () {
       const error = yield* (yield* Jobs)
-        .open({ id: '0123456789abcdef', count: 6 })
+        .open({ id: '0123456789abcdef', interval: 10 })
         .pipe(Effect.flip)
       assert.strictEqual(error._tag, 'FileNotFound')
     }).pipe(Effect.provide(layer))

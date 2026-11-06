@@ -11,10 +11,16 @@ const ok = (schema: Schema.Top, input: unknown) =>
 
 describe('schema', () => {
   it('OpenSourceInput', () => {
-    assert.isTrue(ok(OpenSourceInput, { id: 'a1b2c3d4e5f60718', count: 12 }))
-    assert.isFalse(ok(OpenSourceInput, { id: 'A1B2C3D4E5F60718', count: 12 }))
-    assert.isFalse(ok(OpenSourceInput, { id: '../etc/passwd', count: 12 }))
-    assert.isFalse(ok(OpenSourceInput, { id: 'a1b2c3d4e5f60718', count: 13 }))
+    const id = 'a1b2c3d4e5f60718'
+    assert.isTrue(ok(OpenSourceInput, { id, interval: 10 }))
+    assert.isTrue(ok(OpenSourceInput, { id, interval: 1, mode: 'scene' }))
+    assert.isFalse(
+      ok(OpenSourceInput, { id: 'A1B2C3D4E5F60718', interval: 10 }),
+    )
+    assert.isFalse(ok(OpenSourceInput, { id: '../etc/passwd', interval: 10 }))
+    assert.isFalse(ok(OpenSourceInput, { id, interval: 3 }))
+    assert.isFalse(ok(OpenSourceInput, { id, count: 12 }))
+    assert.isFalse(ok(OpenSourceInput, { id, interval: 10, mode: 'x' }))
   })
 
   it('SecondsFromString', () => {

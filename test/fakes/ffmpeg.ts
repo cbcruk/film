@@ -65,7 +65,7 @@ export const ffmpegFake = (options: FakeOptions = {}) => {
       formats: Effect.succeed(['png', 'jpg']),
       probe: () =>
         Effect.succeed({
-          duration: options.duration ?? 100,
+          duration: options.duration ?? 120,
           width: 1920,
           height: 1080,
           fps: 30,

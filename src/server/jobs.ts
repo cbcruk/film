@@ -14,16 +14,17 @@ import {
 } from 'effect'
 import {
   type SceneCut,
-  pickScenes,
+  sceneTimes,
   rangeTimes,
   thumbUrl,
-  thumbnailTimes,
+  intervalTimes,
 } from '../lib/timecode.ts'
 import type {
   RetryResult,
   SourceEvent,
   SourceInfo,
   ThumbCount,
+  ThumbInterval,
   ThumbMode,
   VideoMeta,
 } from '../lib/types.ts'
@@ -45,7 +46,10 @@ interface Job {
   readonly info: SourceInfo
   readonly file: string
   /** 요청한 방식·개수 (장면 모드는 실제 장수가 적거나 균등으로 대신될 수 있어 요청 기준으로 재사용) */
-  readonly requested: { readonly mode: ThumbMode; readonly count: ThumbCount }
+  readonly requested: {
+    readonly mode: ThumbMode
+    readonly interval: ThumbInterval
+  }
   /** 지금까지 발행한 이벤트 (늦게 구독한 쪽에 먼저 보낸다) */
   readonly history: Ref.Ref<ReadonlyArray<SourceEvent>>
   readonly pubsub: PubSub.PubSub<SourceEvent>
@@ -60,7 +64,8 @@ export class Jobs extends Context.Service<
      *  같은 소스·같은 개수로 다시 열면(새로고침 등) 진행 중인 세트를 그대로 돌려준다 */
     readonly open: (input: {
       readonly id: string
-      readonly count: ThumbCount
+      /** 균등 모드 간격 (초). 장면 모드는 무시 (전환을 모두 보여준다) */
+      readonly interval: ThumbInterval
       /** 기본 'even'. 'scene'이면 장면 전환 시점에서 고른다 (F3-7) */
       readonly mode?: ThumbMode
     }) => Effect.Effect<
@@ -213,11 +218,11 @@ export class Jobs extends Context.Service<
 
       type OpenInput = {
         readonly id: string
-        readonly count: ThumbCount
+        readonly interval: ThumbInterval
         readonly mode?: ThumbMode
       }
 
-      /** 같은 소스·개수·방식의 전체 세트가 이미 있으면 그것 */
+      /** 같은 소스·방식(·균등이면 간격)의 전체 세트가 이미 있으면 그것. 장면 모드는 간격과 상관없이 전부 */
       const reusable = (input: OpenInput) =>
         Ref.get(current).pipe(
           Effect.map((existing) =>
@@ -227,7 +232,8 @@ export class Jobs extends Context.Service<
                 job.info.id === input.id &&
                 job.info.range === undefined &&
                 job.requested.mode === (input.mode ?? 'even') &&
-                job.requested.count === input.count,
+                (input.mode === 'scene' ||
+                  job.requested.interval === input.interval),
             ),
           ),
         )
@@ -241,20 +247,19 @@ export class Jobs extends Context.Service<
 
         const file = yield* library.resolve(input.id)
         const meta = yield* loadMeta(input.id, file)
-        const scenes =
-          cuts === undefined ? [] : pickScenes(cuts, input.count, meta.duration)
+        const scenes = cuts === undefined ? [] : sceneTimes(cuts, meta.duration)
         // 장면 모드인데 전환을 하나도 못 찾으면 균등 분할로 대신한다
         const mode: ThumbMode = scenes.length > 0 ? 'scene' : 'even'
         return yield* start({
           id: input.id,
           file,
           meta,
-          requested: { mode: input.mode ?? 'even', count: input.count },
+          requested: { mode: input.mode ?? 'even', interval: input.interval },
           mode,
           times:
             mode === 'scene'
               ? scenes
-              : thumbnailTimes(meta.duration, input.count),
+              : intervalTimes(meta.duration, input.interval),
           ...(cuts === undefined ? {} : { sceneCuts: cuts.length }),
         })
       })
@@ -347,7 +352,7 @@ export class Jobs extends Context.Service<
           file: job.file,
           meta,
           times: rangeTimes(from, to, count),
-          requested: { mode: job.requested.mode, count },
+          requested: job.requested,
           mode: job.info.mode,
           range: { from, to },
         })

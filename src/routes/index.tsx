@@ -19,16 +19,20 @@ import type {
   FrameFormat,
   SourceInfo,
   ThumbCount,
+  ThumbInterval,
   ThumbMode,
 } from '../lib/types.ts'
 
-const COUNTS: ReadonlyArray<ThumbCount> = [6, 12, 24, 48]
+const INTERVALS: ReadonlyArray<ThumbInterval> = [1, 2, 5, 10, 30]
+
+/** [이 구간 더 보기]로 나누는 장수 */
+const RANGE_COUNT: ThumbCount = 12
 
 interface Search {
   /** 선택한 영상 ID */
   readonly v?: string
-  /** 썸네일 개수 (장면 모드에서는 최대 개수) */
-  readonly n: ThumbCount
+  /** 균등 모드 간격 (초) */
+  readonly i: ThumbInterval
   /** 장면 모드 (없으면 균등 분할) */
   readonly m?: 'scene'
 }
@@ -44,9 +48,9 @@ export const Route = createFileRoute('/')({
       typeof search.v === 'string' && /^[0-9a-f]{16}$/.test(search.v)
         ? search.v
         : undefined
-    const n = COUNTS.find((c) => c === Number(search.n)) ?? 12
+    const i = INTERVALS.find((c) => c === Number(search.i)) ?? 10
     return {
-      n,
+      i,
       ...(v === undefined ? {} : { v }),
       ...(search.m === 'scene' ? { m: 'scene' as const } : {}),
     }
@@ -120,12 +124,16 @@ function HomePage() {
           <p className="empty">왼쪽 목록에서 영상을 고르세요</p>
         ) : (
           <SourcePanel
-            key={`${search.v}-${search.n}-${search.m ?? 'even'}`}
+            key={
+              search.m === 'scene'
+                ? `${search.v}-scene`
+                : `${search.v}-${search.i}`
+            }
             id={search.v}
-            count={search.n}
+            interval={search.i}
             mode={search.m ?? 'even'}
             formats={health.formats}
-            onCount={(n) => navigate({ search: (s) => ({ ...s, n }) })}
+            onInterval={(i) => navigate({ search: (s) => ({ ...s, i }) })}
             onMode={(mode) =>
               navigate({
                 search: ({ m: _, ...s }) =>
@@ -148,17 +156,17 @@ type OpenState =
 
 function SourcePanel(props: {
   readonly id: string
-  readonly count: ThumbCount
+  readonly interval: ThumbInterval
   readonly mode: ThumbMode
   readonly formats: ReadonlyArray<FrameFormat>
-  readonly onCount: (n: ThumbCount) => void
+  readonly onInterval: (i: ThumbInterval) => void
   readonly onMode: (mode: ThumbMode) => void
   /** 파일이 사라졌을 때 목록을 다시 읽는다 */
   readonly onMissing: () => void
   /** 열기에 성공하면 최근 목록에 넣는다 */
   readonly onOpened: (id: string) => void
 }) {
-  const { id, count, mode } = props
+  const { id, interval, mode } = props
   const [state, setState] = useState<OpenState>({ status: 'loading' })
   // 서버가 소스를 잃어버리면(재시작 등) 한 번 다시 연다
   const [attempt, setAttempt] = useState(0)
@@ -166,7 +174,7 @@ function SourcePanel(props: {
   useEffect(() => {
     let active = true
     setState({ status: 'loading' })
-    openSource({ data: { id, count, mode } }).then(
+    openSource({ data: { id, interval, mode } }).then(
       (info) => {
         if (!active) return
         setState({ status: 'ready', info })
@@ -178,7 +186,7 @@ function SourcePanel(props: {
     return () => {
       active = false
     }
-  }, [id, count, mode, attempt])
+  }, [id, interval, mode, attempt])
 
   if (state.status === 'loading') {
     return mode === 'scene' ? (
@@ -209,10 +217,10 @@ function SourcePanel(props: {
   return (
     <SourceView
       info={state.info}
-      count={count}
+      interval={interval}
       mode={mode}
       formats={props.formats}
-      onCount={props.onCount}
+      onInterval={props.onInterval}
       onMode={props.onMode}
       onLost={() => attempt === 0 && setAttempt(1)}
     />
@@ -237,11 +245,11 @@ function SceneAnalyzing() {
 
 function SourceView(props: {
   readonly info: SourceInfo
-  /** 요청한 개수·방식 (장면 모드는 실제 장수가 더 적을 수 있다) */
-  readonly count: ThumbCount
+  /** 요청한 간격·방식 */
+  readonly interval: ThumbInterval
   readonly mode: ThumbMode
   readonly formats: ReadonlyArray<FrameFormat>
-  readonly onCount: (n: ThumbCount) => void
+  readonly onInterval: (i: ThumbInterval) => void
   readonly onMode: (mode: ThumbMode) => void
   readonly onLost: () => void
 }) {
@@ -302,7 +310,7 @@ function SourceView(props: {
             createSet({
               data: {
                 id: info.id,
-                count: props.count,
+                count: RANGE_COUNT,
                 from,
                 to,
               },
@@ -313,7 +321,7 @@ function SourceView(props: {
   const backToFull = () =>
     run(() =>
       openSource({
-        data: { id: info.id, count: props.count, mode: props.mode },
+        data: { id: info.id, interval: props.interval, mode: props.mode },
       }),
     )
 
@@ -382,22 +390,24 @@ function SourceView(props: {
             </button>
           ))}
         </span>
-        <label className="count">
-          썸네일
-          <select
-            value={props.count}
-            onChange={(e) =>
-              props.onCount(Number(e.target.value) as ThumbCount)
-            }
-            disabled={info.range !== undefined}
-          >
-            {COUNTS.map((n) => (
-              <option key={n} value={n}>
-                {n}장
-              </option>
-            ))}
-          </select>
-        </label>
+        {props.mode === 'even' && (
+          <label className="count">
+            간격
+            <select
+              value={props.interval}
+              onChange={(e) =>
+                props.onInterval(Number(e.target.value) as ThumbInterval)
+              }
+              disabled={info.range !== undefined}
+            >
+              {INTERVALS.map((i) => (
+                <option key={i} value={i}>
+                  {i}초마다
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <progress
           max={events.total}
           value={events.done}
@@ -410,7 +420,7 @@ function SourceView(props: {
           <span className="scene-note">
             {info.mode === 'even'
               ? '장면 전환을 찾지 못해 균등 분할로 보여줍니다'
-              : `장면 전환 ${info.sceneCuts ?? 0}곳 중 ${info.times.length}장`}
+              : `장면 전환 ${info.times.length}곳`}
           </span>
         )}
         {info.range && (

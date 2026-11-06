@@ -8,6 +8,9 @@ export const SourceId = Schema.String.check(Schema.isPattern(/^[0-9a-f]{16}$/))
 
 export const ThumbCount = Schema.Literals([6, 12, 24, 48])
 
+/** 균등 모드 간격 (초) */
+export const ThumbInterval = Schema.Literals([1, 2, 5, 10, 30])
+
 /** 시점(초). URL 문자열에서 읽는다. 0 이상, 밀리초로 반올림. 영상 길이 확인은 사용하는 쪽에서 */
 export const SecondsFromString = Schema.String.check(
   Schema.isPattern(/^\d+(\.\d+)?$/),
@@ -21,7 +24,7 @@ export const ThumbMode = Schema.Literals(['even', 'scene'])
 
 export const OpenSourceInput = Schema.Struct({
   id: SourceId,
-  count: ThumbCount,
+  interval: ThumbInterval,
   mode: Schema.optionalKey(ThumbMode),
 })
 
