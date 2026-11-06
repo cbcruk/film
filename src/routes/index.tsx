@@ -178,7 +178,12 @@ function HomePage() {
           })
         }
         onMissing={refresh}
-        onOpened={(id) => sendLibrary({ type: 'OPENED', id })}
+        onOpened={(id) => {
+          sendLibrary({ type: 'OPENED', id })
+          // 열기에 성공하면 서버 캐시에 meta.json이 생긴다 → 목록의 "썸네일 있음"을 다시 읽는다
+          if (videos.find((v) => v.id === id)?.cached === false)
+            void router.invalidate()
+        }}
         onClose={closeVideo}
       />
     )
