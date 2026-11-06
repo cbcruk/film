@@ -19,6 +19,8 @@ export interface Health {
   readonly ffmpeg: string | null
   readonly filmDir: string
   readonly filmDirExists: boolean
+  /** 저장 가능한 포맷 (설치된 ffmpeg 인코더 기준) */
+  readonly formats: ReadonlyArray<FrameFormat>
 }
 
 /** listVideos 항목. folder는 FILM_DIR 기준 상대 폴더 (최상위면 "") */
@@ -40,3 +42,43 @@ export interface VideoMeta {
 }
 
 export type FrameFormat = 'png' | 'jpg' | 'webp'
+
+/** listVideos 결과 */
+export interface VideoList {
+  readonly dir: string
+  readonly videos: ReadonlyArray<VideoEntry & { readonly cached: boolean }>
+}
+
+export type ThumbCount = 6 | 12 | 24 | 48
+
+/** openSource 결과. times는 세트의 시점 목록 (스켈레톤 카드·타임코드 표시용) */
+export interface SourceInfo extends VideoMeta {
+  readonly id: string
+  readonly name: string
+  readonly setId: string
+  readonly times: ReadonlyArray<number>
+}
+
+/** SSE 이벤트 (event 이름 = type) */
+export type SourceEvent =
+  | {
+      readonly type: 'thumb'
+      readonly setId: string
+      readonly index: number
+      readonly t: number
+      readonly url: string
+    }
+  | {
+      readonly type: 'progress'
+      readonly setId: string
+      readonly done: number
+      readonly total: number
+    }
+  | { readonly type: 'done'; readonly setId: string }
+  | {
+      readonly type: 'error'
+      readonly setId: string
+      readonly index?: number
+      readonly code: ErrorCode
+      readonly message: string
+    }

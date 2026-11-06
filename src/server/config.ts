@@ -21,6 +21,8 @@ export class AppConfig extends Context.Service<
     readonly cacheDir: string
     readonly concurrency: number
     readonly ffmpegTimeout: Duration.Duration
+    /** 캐시 총 용량 한도. 넘으면 오래 안 연 소스부터 지운다 */
+    readonly cacheMaxBytes: number
   }
 >()('film/server/AppConfig') {
   static readonly layer = Layer.effect(
@@ -34,6 +36,7 @@ export class AppConfig extends Context.Service<
         cacheDir: path.join(os.homedir(), '.cache', 'film'),
         concurrency: Math.max(1, Math.floor(os.availableParallelism() / 2)),
         ffmpegTimeout: Duration.seconds(30),
+        cacheMaxBytes: 1024 ** 3,
       })
     }),
   )

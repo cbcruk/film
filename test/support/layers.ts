@@ -17,6 +17,7 @@ export const testConfig = (overrides: Partial<AppConfig['Service']> = {}) =>
       cacheDir: path.join(os.tmpdir(), 'film-test-cache'),
       concurrency: 2,
       ffmpegTimeout: Duration.seconds(30),
+      cacheMaxBytes: 1024 ** 3,
       ...overrides,
     }),
   )

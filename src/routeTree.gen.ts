@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiSourcesIdEventsRouteImport } from './routes/api/sources.$id.events'
+import { Route as ApiSourcesIdThumbRouteImport } from './routes/api/sources.$id.thumb'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSourcesIdEventsRoute = ApiSourcesIdEventsRouteImport.update({
+  id: '/api/sources/$id/events',
+  path: '/api/sources/$id/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSourcesIdThumbRoute = ApiSourcesIdThumbRouteImport.update({
+  id: '/api/sources/$id/thumb',
+  path: '/api/sources/$id/thumb',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/sources/$id/events': typeof ApiSourcesIdEventsRoute
+  '/api/sources/$id/thumb': typeof ApiSourcesIdThumbRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/sources/$id/events': typeof ApiSourcesIdEventsRoute
+  '/api/sources/$id/thumb': typeof ApiSourcesIdThumbRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/sources/$id/events': typeof ApiSourcesIdEventsRoute
+  '/api/sources/$id/thumb': typeof ApiSourcesIdThumbRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/sources/$id/events' | '/api/sources/$id/thumb'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/sources/$id/events' | '/api/sources/$id/thumb'
+  id: '__root__' | '/' | '/api/sources/$id/events' | '/api/sources/$id/thumb'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiSourcesIdEventsRoute: typeof ApiSourcesIdEventsRoute
+  ApiSourcesIdThumbRoute: typeof ApiSourcesIdThumbRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +68,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/sources/$id/events': {
+      id: '/api/sources/$id/events'
+      path: '/api/sources/$id/events'
+      fullPath: '/api/sources/$id/events'
+      preLoaderRoute: typeof ApiSourcesIdEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/sources/$id/thumb': {
+      id: '/api/sources/$id/thumb'
+      path: '/api/sources/$id/thumb'
+      fullPath: '/api/sources/$id/thumb'
+      preLoaderRoute: typeof ApiSourcesIdThumbRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiSourcesIdEventsRoute: ApiSourcesIdEventsRoute,
+  ApiSourcesIdThumbRoute: ApiSourcesIdThumbRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

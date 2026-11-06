@@ -17,6 +17,7 @@ export const getHealth = createServerFn({ method: 'GET' }).handler(() =>
         ffmpeg: version._tag === 'Some' ? version.value : null,
         filmDir: config.filmDir,
         filmDirExists: info._tag === 'Some' && info.value.type === 'Directory',
+        formats: yield* ffmpeg.formats,
       }
       return health
     }),

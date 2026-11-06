@@ -207,7 +207,7 @@ film/
     global-setup.ts                              # 픽스처 영상 생성 (vitest globalSetup)
     fixtures/                                    # 생성된 픽스처 (git 제외). 다시 만들려면 폴더 삭제
     support/layers.ts                            # 테스트용 Layer (testConfig, ffmpegLive, libraryLive)
-    fakes/                                       # 테스트용 가짜 서비스 Layer (FfmpegFake 등, M2)
+    fakes/ffmpeg.ts                              # 가짜 Ffmpeg (지연·실패·멈춤, 동시 실행 수 기록)
     config.test.ts                               # .env 로딩, 기본값
     process.test.ts                              # 인터럽트·타임아웃 시 자식 프로세스 종료
     ffmpeg.test.ts
@@ -243,23 +243,23 @@ film/
 | `AppConfig` | `FILM_DIR`(기본 `~/Movies`), 캐시 경로, 동시성, 타임아웃                                                             | `Config`          |
 | `Ffmpeg`    | `probe(path)`, `thumbnail(path, t, out)`, `frame(path, t, format) → Stream<Uint8Array>`, `checkInstalled`, `formats` | `AppConfig`       |
 | `Library`   | `list()`, `resolve(id) → 절대경로` (폴더 밖 차단)                                                                    | `AppConfig`       |
-| `Cache`     | 썸네일 경로, 원자적 쓰기, 용량 정리                                                                                  | `AppConfig`       |
+| `Cache`     | 썸네일 경로, `meta.json`(probe 결과), 용량 정리                                                                      | `AppConfig`       |
 | `Jobs`      | 세트 생성 작업, 동시성 제한, 이전 작업 취소, 이벤트 발행·재전송                                                      | `Ffmpeg`, `Cache` |
 
 `AppLive = Jobs + Library + Cache + Ffmpeg + AppConfig` (Layer 합성). 테스트에서는 `Ffmpeg`를 가짜 Layer로 바꿔 끼운다.
 
 **요구사항 → Effect 대응**
 
-| 요구사항                         | 구현                                                                                                                                                  |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ffmpeg 프로세스 수명 (F3-5, 9절) | `effect/process`의 `ChildProcessSpawner.spawn`을 `Effect.scoped` 안에서 실행. 스코프가 닫히면(인터럽트 포함) **프로세스가 kill됨** — M0 테스트로 확인 |
-| 30초 타임아웃                    | `Effect.timeout` 계열 → `FfmpegTimeout` 에러. 시간 초과도 인터럽트이므로 위 경로로 kill — M0 테스트로 확인                                            |
-| 동시성 제한 (F3-3)               | `Effect.forEach(times, extract, { concurrency: n })`                                                                                                  |
-| 이전 작업 취소 (F3-5)            | 소스별 작업을 `Fiber`로 보관, 새 소스를 열면 `Fiber.interrupt`                                                                                        |
-| 클라이언트 연결 끊김             | `runRouteEffect(effect, request)`가 `request.signal`을 넘김 → abort 시 인터럽트                                                                       |
-| SSE + 늦은 구독자 재전송         | 작업별 완료 목록(`Ref`) + `PubSub`. 구독 시 완료 목록을 먼저 내보내고 이후 이벤트를 이어 붙인 `Stream`을 `ReadableStream`으로 변환                    |
-| 캐시 정리 (10절)                 | `Effect.repeat(cleanup, Schedule.spaced("1 hour"))`를 런타임 시작 시 백그라운드로 실행                                                                |
-| 에러 코드 (11절)                 | 코드별 `Schema.TaggedError`. 핸들러 경계에서 HTTP 상태/응답으로 변환 (누락 시 타입 에러)                                                              |
+| 요구사항                         | 구현                                                                                                                                                                                                             |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ffmpeg 프로세스 수명 (F3-5, 9절) | `effect/process`의 `ChildProcessSpawner.spawn`을 `Effect.scoped` 안에서 실행. 스코프가 닫히면(인터럽트 포함) **프로세스가 kill됨** — M0 테스트로 확인                                                            |
+| 30초 타임아웃                    | `Effect.timeout` 계열 → `FfmpegTimeout` 에러. 시간 초과도 인터럽트이므로 위 경로로 kill — M0 테스트로 확인                                                                                                       |
+| 동시성 제한 (F3-3)               | `Effect.forEach(times, extract, { concurrency: n })`                                                                                                                                                             |
+| 이전 작업 취소 (F3-5)            | `FiberHandle` 하나에 작업을 넣는다. 새 작업을 넣으면 이전 Fiber가 자동으로 인터럽트됨                                                                                                                            |
+| 클라이언트 연결 끊김             | `runRouteEffect(effect, request)`가 `request.signal`을 넘김 → abort 시 인터럽트                                                                                                                                  |
+| SSE + 늦은 구독자 재전송         | 작업별 발행 기록(`Ref`) + `PubSub`. 구독 시 기록을 먼저 내보내고 이후 이벤트를 이어 붙인 `Stream`을 `ReadableStream`으로 변환. 발행과 구독 시작은 `Semaphore(1)`로 묶어 누락·중복이 없게 한다 (M2 테스트로 확인) |
+| 캐시 정리 (10절)                 | `Effect.repeat(cleanup, Schedule.spaced("1 hour"))`를 런타임 시작 시 백그라운드로 실행                                                                                                                           |
+| 에러 코드 (11절)                 | 코드별 `Schema.TaggedError`. 핸들러 경계에서 HTTP 상태/응답으로 변환 (누락 시 타입 에러)                                                                                                                         |
 
 **TanStack Start 연결 (`src/server/runtime.ts`)**
 
@@ -336,11 +336,14 @@ film/
   width: 1920, height: 1080,   // 회전 반영
   fps: 23.976,
   codec: "vp9",
-  setId: "s1"
+  setId: "s1",
+  times: [4.31, 23.12, ...]     // 세트의 시점 목록 (스켈레톤 카드·타임코드용)
 }
 ```
 
 - 에러: `FILE_NOT_FOUND` · `NOT_A_VIDEO`
+- 같은 소스·같은 개수로 다시 열면(화면 새로고침 등) 진행 중인 세트를 그대로 돌려준다 (같은 `setId`).
+- probe 결과는 캐시의 `meta.json`을 재사용한다.
 
 #### `createSet({ id, count, from?, to? })` — POST — 2차
 
@@ -362,10 +365,14 @@ film/
 - `ReadableStream`으로 `text/event-stream` 응답.
 - 연결 시 이미 완료된 썸네일을 먼저 모두 보낸다(늦은 구독 대응).
 - `request.signal`이 abort되면 구독 해제.
+- `done`을 보낸 뒤 연결을 닫는다. `EventSource`는 연결이 닫히면 자동으로 재연결하므로, 클라이언트는 `done`을 받으면 직접 `close()`한다 (재연결해도 같은 이벤트를 다시 받을 뿐 문제는 없다).
+- 열린 소스(가장 최근 `openSource`)가 아니면 `404 FILE_NOT_FOUND` → 클라이언트는 `openSource`를 다시 호출. 새 소스를 열면 이전 소스의 스트림은 `done` 없이 끝난다.
 
 #### `GET /api/sources/$id/thumb?t=12.345`
 
 썸네일 JPEG (캐시). `Cache-Control: max-age=31536000, immutable`
+
+- 캐시에 있는 것만 보낸다 (생성은 `Jobs`). 없으면 `404 FILE_NOT_FOUND`. `t`는 숫자 형식 문자열만 허용 (`''`·`-1` 등은 `400`).
 
 #### `GET /api/sources/$id/frame/$t/$filename`
 
@@ -433,6 +440,7 @@ ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -c:v <png | mjpeg -q
 
 - 소스 ID에 size·mtime이 포함되므로 원본이 바뀌면 자동으로 새 캐시.
 - 서버 시작 시 + 1시간마다 총 용량 확인, 1GB 초과 시 최근 접근 순으로 정리.
+  - "최근 접근" = `meta.json`의 수정 시각. 소스를 열 때마다 갱신한다.
 
 ## 11. 에러 처리
 
@@ -472,7 +480,7 @@ Vitest + `@effect/vitest` 사용. `src/server/*`는 TanStack과 무관한 Effect
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **M0** ✅ | TanStack Start 프로젝트 생성, `127.0.0.1:3000` 실행, Vitest·`@effect/vitest`·Prettier 설정, `.env` 로딩. `runtime.ts`·`errors.ts` 골격, 환경 확인 화면. 확인 결과는 7-1·7-2에 반영 |
 | **M1** ✅ | `Ffmpeg`·`Library`·`AppConfig` 서비스 + 테스트                                                                                                                                     |
-| **M2**    | 서버 함수 `listVideos`, `openSource`, 썸네일 작업(`jobs.ts`) + SSE 라우트                                                                                                          |
+| **M2** ✅ | 서버 함수 `listVideos`, `openSource`, 썸네일 작업(`jobs.ts`) + SSE 라우트                                                                                                          |
 | **M3**    | 화면: 영상 목록(F1), 썸네일 그리드                                                                                                                                                 |
 | **M4**    | 원본 해상도 미리보기 + [다른 이름으로 저장] 파일명·포맷 확인 (F4, F5) → **MVP 완료**                                                                                               |
 | M5        | 구간 재생성, 프레임 미세 조정, 최근 파일                                                                                                                                           |

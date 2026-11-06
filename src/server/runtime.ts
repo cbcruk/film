@@ -5,11 +5,14 @@ import { ServerError } from '../lib/server-error.ts'
 import type { ErrorBody } from '../lib/types.ts'
 import { AppConfig, configProviderLayer } from './config.ts'
 import { type AppError, toErrorBody, toStatus } from './errors.ts'
+import { Cache } from './cache.ts'
 import { Ffmpeg } from './ffmpeg.ts'
+import { Jobs } from './jobs.ts'
 import { Library } from './library.ts'
 
 // 설정 로딩 실패는 복구할 수 없는 시작 오류이므로 결함(defect)으로 처리한다.
-export const AppLive = Layer.mergeAll(Ffmpeg.layer, Library.layer).pipe(
+export const AppLive = Jobs.layer.pipe(
+  Layer.provideMerge(Layer.mergeAll(Ffmpeg.layer, Library.layer, Cache.layer)),
   Layer.provideMerge(AppConfig.layer),
   Layer.provide(configProviderLayer()),
   Layer.provideMerge(NodeServices.layer),
