@@ -118,7 +118,8 @@ FILM_DIR=~/Movies/MV
 - **기본 파일명**: 저장 창에 뜨는 이름이 의미 있도록 이미지 URL의 마지막 경로를 파일명으로 만든다.
   - 형식: `{원본파일명}_{mm}m{ss}s{ms}.{ext}` 예) `trip_03m12s450.png`
   - 응답 헤더에도 `Content-Disposition: inline; filename*=UTF-8''...`를 넣는다 (브라우저별 차이 대비).
-- **포맷**: PNG(기본) / JPEG(품질 92) / WebP 중 선택. 바꾸면 미리보기 URL이 바뀐다. 마지막 선택값은 `localStorage`에 기억.
+- **포맷**: PNG(기본) / JPEG / WebP 중 선택. 바꾸면 미리보기 URL이 바뀐다. 마지막 선택값은 `localStorage`에 기억.
+  - 선택지는 서버의 `Ffmpeg.formats`(설치된 ffmpeg가 인코딩할 수 있는 포맷)만 보여준다. Homebrew `ffmpeg` 9.0.2에는 `libwebp`가 없어 WebP가 빠진다 (M1 확인). WebP가 필요하면 libwebp가 포함된 빌드로 교체.
 - 미리보기 아래에 "이미지를 우클릭해 [다른 이름으로 저장]" 안내 문구를 둔다.
 
 ## 6. 비기능 요구사항
@@ -203,8 +204,10 @@ film/
     hooks/
       useSourceEvents.ts                         # EventSource 구독
   test/
-    fixtures/                                    # 테스트 시작 시 ffmpeg testsrc로 생성
-    fakes/                                       # 테스트용 가짜 서비스 Layer (FfmpegFake 등)
+    global-setup.ts                              # 픽스처 영상 생성 (vitest globalSetup)
+    fixtures/                                    # 생성된 픽스처 (git 제외). 다시 만들려면 폴더 삭제
+    support/layers.ts                            # 테스트용 Layer (testConfig, ffmpegLive, libraryLive)
+    fakes/                                       # 테스트용 가짜 서비스 Layer (FfmpegFake 등, M2)
     config.test.ts                               # .env 로딩, 기본값
     process.test.ts                              # 인터럽트·타임아웃 시 자식 프로세스 종료
     ffmpeg.test.ts
@@ -235,13 +238,13 @@ film/
 
 **서비스 (Effect `Context` 태그 + `Layer`)**
 
-| 서비스      | 책임                                                                                                        | 의존              |
-| ----------- | ----------------------------------------------------------------------------------------------------------- | ----------------- |
-| `AppConfig` | `FILM_DIR`(기본 `~/Movies`), 캐시 경로, 동시성, 타임아웃                                                    | `Config`          |
-| `Ffmpeg`    | `probe(path)`, `thumbnail(path, t, out)`, `frame(path, t, format) → Stream<Uint8Array>`, `checkInstalled()` | `AppConfig`       |
-| `Library`   | `list()`, `resolve(id) → 절대경로` (폴더 밖 차단)                                                           | `AppConfig`       |
-| `Cache`     | 썸네일 경로, 원자적 쓰기, 용량 정리                                                                         | `AppConfig`       |
-| `Jobs`      | 세트 생성 작업, 동시성 제한, 이전 작업 취소, 이벤트 발행·재전송                                             | `Ffmpeg`, `Cache` |
+| 서비스      | 책임                                                                                                                 | 의존              |
+| ----------- | -------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `AppConfig` | `FILM_DIR`(기본 `~/Movies`), 캐시 경로, 동시성, 타임아웃                                                             | `Config`          |
+| `Ffmpeg`    | `probe(path)`, `thumbnail(path, t, out)`, `frame(path, t, format) → Stream<Uint8Array>`, `checkInstalled`, `formats` | `AppConfig`       |
+| `Library`   | `list()`, `resolve(id) → 절대경로` (폴더 밖 차단)                                                                    | `AppConfig`       |
+| `Cache`     | 썸네일 경로, 원자적 쓰기, 용량 정리                                                                                  | `AppConfig`       |
+| `Jobs`      | 세트 생성 작업, 동시성 제한, 이전 작업 취소, 이벤트 발행·재전송                                                      | `Ffmpeg`, `Cache` |
 
 `AppLive = Jobs + Library + Cache + Ffmpeg + AppConfig` (Layer 합성). 테스트에서는 `Ffmpeg`를 가짜 Layer로 바꿔 끼운다.
 
@@ -379,7 +382,7 @@ film/
 
 - `id` — `/^[0-9a-f]{16}$/`, 열린 소스 목록에 있어야 함
 - `t` — 유한한 숫자, `0 ≤ t < duration`, 소수점 3자리로 반올림
-- `filename` — 확장자 `png | jpg | webp`, 경로 구분자(`/`, `\`) 없음
+- `filename` — 확장자 `png | jpg | webp`, 경로 구분자(`/`, `\`) 없음. 확장자가 `Ffmpeg.formats`에 없으면 `INVALID_PARAM`
 - `count` — `6 | 12 | 24 | 48`
 - 클라이언트는 경로를 보내지 않는다. 서버가 `id`로 경로를 찾은 뒤, 실제 경로(`realpath`)가 `FILM_DIR` 안에 있는지 한 번 더 확인한다.
 
@@ -407,10 +410,17 @@ ffmpeg -v error -ss <t> -i <path> -frames:v 1 -vf scale=320:-2 -q:v 4 -y <cache>
 **원본 프레임 (스트리밍)**
 
 ```bash
-ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -c:v <png|mjpeg|libwebp> [-q:v 2] pipe:1
+ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -c:v <png | mjpeg -q:v 2 | libwebp -quality 90> pipe:1
 ```
 
 - 클라이언트 연결이 끊기면 프로세스 kill.
+
+**M1 확인 사항**
+
+- 영상 길이를 넘는 시점은 ffmpeg가 **exit 0으로 끝나면서 출력이 없다**. 그래서 썸네일은 파일 존재, 프레임은 출력 바이트 수(0이면 실패)로 `ExtractFailed`를 판단한다.
+- 프레임 스트림은 stderr를 따로 읽어둔다 (안 읽으면 파이프가 차서 멈출 수 있음). 실패 메시지는 stderr 내용.
+- 회전 메타데이터가 있는 영상은 ffmpeg가 출력 이미지에 회전을 자동 적용한다 → 프레임 크기 = probe의 표시 크기.
+- 타임아웃: 수집형(probe·thumbnail)은 `Effect.timeoutOrElse`, 스트림형(frame)은 `Stream.interruptWhen`. 둘 다 프로세스가 남지 않음을 테스트로 확인.
 
 ## 10. 캐시
 
@@ -461,7 +471,7 @@ Vitest + `@effect/vitest` 사용. `src/server/*`는 TanStack과 무관한 Effect
 | 단계      | 내용                                                                                                                                                                               |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **M0** ✅ | TanStack Start 프로젝트 생성, `127.0.0.1:3000` 실행, Vitest·`@effect/vitest`·Prettier 설정, `.env` 로딩. `runtime.ts`·`errors.ts` 골격, 환경 확인 화면. 확인 결과는 7-1·7-2에 반영 |
-| **M1**    | `Ffmpeg`·`Library`·`AppConfig` 서비스 + 테스트                                                                                                                                     |
+| **M1** ✅ | `Ffmpeg`·`Library`·`AppConfig` 서비스 + 테스트                                                                                                                                     |
 | **M2**    | 서버 함수 `listVideos`, `openSource`, 썸네일 작업(`jobs.ts`) + SSE 라우트                                                                                                          |
 | **M3**    | 화면: 영상 목록(F1), 썸네일 그리드                                                                                                                                                 |
 | **M4**    | 원본 해상도 미리보기 + [다른 이름으로 저장] 파일명·포맷 확인 (F4, F5) → **MVP 완료**                                                                                               |

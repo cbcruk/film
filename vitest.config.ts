@@ -5,5 +5,7 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // 픽스처 영상을 ffmpeg로 생성 (test/fixtures/, git 제외)
+    globalSetup: ['test/global-setup.ts'],
   },
 })

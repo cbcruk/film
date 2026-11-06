@@ -1,7 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
-import { Effect } from 'effect'
-import { FileSystem } from 'effect'
-import { NodeServices } from '@effect/platform-node'
+import { Effect, FileSystem } from 'effect'
 import type { Health } from '../lib/types.ts'
 import { AppConfig } from '../server/config.ts'
 import { Ffmpeg } from '../server/ffmpeg.ts'
@@ -21,6 +19,6 @@ export const getHealth = createServerFn({ method: 'GET' }).handler(() =>
         filmDirExists: info._tag === 'Some' && info.value.type === 'Directory',
       }
       return health
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }),
   ),
 )

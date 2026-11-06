@@ -15,10 +15,7 @@ dist/
 
 # test
 coverage/
-test/fixtures/*.mp4
-test/fixtures/*.webm
-test/fixtures/*.mov
-test/fixtures/*.mkv
+test/fixtures/
 
 # logs
 *.log
