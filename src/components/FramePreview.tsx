@@ -1,4 +1,17 @@
 import { useEffect, useState } from 'react'
+import { AspectRatio } from '@astryxdesign/core/AspectRatio'
+import { Button } from '@astryxdesign/core/Button'
+import { ButtonGroup } from '@astryxdesign/core/ButtonGroup'
+import { Center } from '@astryxdesign/core/Center'
+import { HStack } from '@astryxdesign/core/HStack'
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@astryxdesign/core/SegmentedControl'
+import { Spinner } from '@astryxdesign/core/Spinner'
+import { StatusDot } from '@astryxdesign/core/StatusDot'
+import { Text } from '@astryxdesign/core/Text'
+import { VStack } from '@astryxdesign/core/VStack'
 import { formatTimecode, frameFilename, frameUrl } from '../lib/timecode.ts'
 import type { FrameFormat, SourceInfo } from '../lib/types.ts'
 
@@ -39,96 +52,89 @@ export function FramePreview({
   busy,
 }: Props) {
   const frame = 1 / (info.fps > 0 ? info.fps : 30)
+  const aspect = info.width / info.height
   const src = frameUrl(info.id, info.name, t, format)
   // 어느 URL이 로드·실패했는지로 상태를 정한다 (캐시된 이미지는 onLoad가 바로 올 수 있음)
   const [result, setResult] = useState<{ src: string; ok: boolean }>()
   const status = result?.src !== src ? 'loading' : result.ok ? 'ready' : 'error'
 
   return (
-    <figure className="preview">
-      <div
-        className="preview-frame"
-        style={{ aspectRatio: info.width / info.height }}
-      >
-        {placeholder && status !== 'ready' && (
-          <img
-            className="preview-placeholder"
-            src={placeholder}
-            alt=""
-            aria-hidden
+    <VStack as="figure" gap={3}>
+      {/* 화면 높이의 62%를 넘지 않게 축소해서 보여줄 뿐, 실제 이미지는 원본 크기 */}
+      <Center>
+        <VStack width={`min(100%, calc(62vh * ${aspect}))`}>
+          <AspectRatio ratio={aspect} fit="contain">
+            {placeholder && status !== 'ready' && (
+              <img src={placeholder} alt="" aria-hidden />
+            )}
+            <img
+              key={src}
+              src={src}
+              alt={`${info.name} ${formatTimecode(t)}`}
+              width={info.width}
+              height={info.height}
+              onLoad={() => setResult({ src, ok: true })}
+              onError={() => setResult({ src, ok: false })}
+              data-preview={status}
+              // 로드 전에는 아래 썸네일이 보이도록 감춘다
+              style={{ opacity: status === 'ready' ? 1 : 0 }}
+            />
+          </AspectRatio>
+        </VStack>
+      </Center>
+
+      <HStack gap={3} wrap="wrap" align="center" justify="between">
+        <ButtonGroup label="시점 이동">
+          <Button label="−1초" tooltip="Shift+←" onClick={() => onStep(-1)} />
+          <Button label="−1프레임" tooltip="," onClick={() => onStep(-frame)} />
+          <Button label="+1프레임" tooltip="." onClick={() => onStep(frame)} />
+          <Button label="+1초" tooltip="Shift+→" onClick={() => onStep(1)} />
+        </ButtonGroup>
+        {onMore && (
+          <Button
+            variant="primary"
+            label={busy ? '만드는 중…' : '이 구간 더 보기'}
+            onClick={onMore}
+            isLoading={busy}
+            data-more
           />
         )}
-        <img
-          key={src}
-          className="preview-image"
-          src={src}
-          alt={`${info.name} ${formatTimecode(t)}`}
-          width={info.width}
-          height={info.height}
-          onLoad={() => setResult({ src, ok: true })}
-          onError={() => setResult({ src, ok: false })}
-          data-status={status}
-        />
-        {status === 'loading' && (
-          <span className="preview-badge">원본 불러오는 중…</span>
-        )}
-        {status === 'error' && (
-          <span className="preview-badge error">
-            원본 프레임을 만들지 못했습니다
-          </span>
-        )}
-      </div>
+      </HStack>
 
-      <div className="preview-tools">
-        <span className="steps" role="group" aria-label="시점 이동">
-          <button type="button" onClick={() => onStep(-1)} title="Shift+←">
-            −1초
-          </button>
-          <button type="button" onClick={() => onStep(-frame)} title=",">
-            −1프레임
-          </button>
-          <button type="button" onClick={() => onStep(frame)} title=".">
-            +1프레임
-          </button>
-          <button type="button" onClick={() => onStep(1)} title="Shift+→">
-            +1초
-          </button>
-        </span>
-        {onMore && (
-          <button
-            type="button"
-            className="more"
-            onClick={onMore}
-            disabled={busy}
+      <VStack as="figcaption" gap={1}>
+        <HStack gap={3} wrap="wrap" align="center">
+          <Text type="large" weight="semibold" hasTabularNumbers>
+            {formatTimecode(t)}
+          </Text>
+          <SegmentedControl
+            size="sm"
+            value={format}
+            onChange={(f) => onFormat(f as FrameFormat)}
+            label="저장 포맷"
           >
-            {busy ? '만드는 중…' : '이 구간 더 보기'}
-          </button>
-        )}
-      </div>
-
-      <figcaption className="preview-caption">
-        <span className="preview-time">{formatTimecode(t)}</span>
-        <span className="preview-name">
-          {frameFilename(info.name, t, format)} · {info.width}×{info.height}
-        </span>
-        <span className="formats" role="radiogroup" aria-label="저장 포맷">
-          {formats.map((f) => (
-            <button
-              key={f}
-              type="button"
-              role="radio"
-              aria-checked={f === format}
-              onClick={() => onFormat(f)}
-            >
-              {LABELS[f]}
-            </button>
-          ))}
-        </span>
-        <span className="preview-hint">
+            {formats.map((f) => (
+              <SegmentedControlItem key={f} value={f} label={LABELS[f]} />
+            ))}
+          </SegmentedControl>
+          {status === 'loading' && (
+            <HStack gap={1} align="center">
+              <Spinner size="sm" />
+              <Text type="supporting">원본 불러오는 중…</Text>
+            </HStack>
+          )}
+          {status === 'error' && (
+            <HStack gap={1} align="center">
+              <StatusDot variant="error" label="오류" />
+              <Text type="supporting">원본 프레임을 만들지 못했습니다</Text>
+            </HStack>
+          )}
+        </HStack>
+        <Text type="supporting">
+          {frameFilename(info.name, t, format)} · {info.width}×{info.height} ·
           이미지를 우클릭해 [이미지를 다른 이름으로 저장]
-        </span>
-      </figcaption>
-    </figure>
+        </Text>
+      </VStack>
+    </VStack>
   )
 }
 

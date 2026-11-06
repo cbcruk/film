@@ -6,3 +6,6 @@ dist
 coverage
 package-lock.json
 src/routeTree.gen.ts
+AGENTS.md
+GEMINI.md
+src/astryx-themes.ts

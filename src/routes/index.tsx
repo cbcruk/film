@@ -1,8 +1,41 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
+import { Banner } from '@astryxdesign/core/Banner'
+import { Button } from '@astryxdesign/core/Button'
+import { Center } from '@astryxdesign/core/Center'
+import { EmptyState } from '@astryxdesign/core/EmptyState'
+import { Heading } from '@astryxdesign/core/Heading'
+import { HStack } from '@astryxdesign/core/HStack'
+import { Badge } from '@astryxdesign/core/Badge'
+import {
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  LayoutPanel,
+} from '@astryxdesign/core/Layout'
+import { ResizeHandle, useResizable } from '@astryxdesign/core/Resizable'
+import { StackItem } from '@astryxdesign/core/Stack'
+import { Tab, TabList } from '@astryxdesign/core/TabList'
+import { TextInput } from '@astryxdesign/core/TextInput'
+import { ProgressBar } from '@astryxdesign/core/ProgressBar'
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@astryxdesign/core/SegmentedControl'
+import { Selector } from '@astryxdesign/core/Selector'
+import { Spinner } from '@astryxdesign/core/Spinner'
+import { Text } from '@astryxdesign/core/Text'
+import { VStack } from '@astryxdesign/core/VStack'
 import { FramePreview, useFrameFormat } from '../components/FramePreview.tsx'
 import { ThumbnailGrid } from '../components/ThumbnailGrid.tsx'
-import { VideoList } from '../components/VideoList.tsx'
+import { VideoTable } from '../components/VideoTable.tsx'
 import { getHealth } from '../functions/health.ts'
 import {
   createSet,
@@ -10,8 +43,10 @@ import {
   openSource,
   retryThumb,
 } from '../functions/sources.ts'
+import { useElementWidth } from '../hooks/useElementWidth.ts'
 import { useRecent } from '../hooks/useRecent.ts'
 import { useSourceEvents } from '../hooks/useSourceEvents.ts'
+import { isTextEntry } from '../lib/keyboard.ts'
 import { ServerError } from '../lib/server-error.ts'
 import { formatTimecode } from '../lib/timecode.ts'
 import type {
@@ -66,6 +101,17 @@ export const Route = createFileRoute('/')({
   component: HomePage,
 })
 
+/** 이보다 좁으면 목록과 썸네일 창을 나란히 두지 않고, 연 영상이 화면 전체를 쓴다 */
+const SINGLE_SURFACE_BELOW = 900
+/** 목록이 이보다 좁으면 크기·수정일 열을 이름 아래로 접는다 */
+const STACK_ROWS_BELOW = 560
+const LIST_MIN_WIDTH = 300
+const PANE_MIN_WIDTH = 480
+/** 썸네일 창이 처음 차지하는 몫 — 이 앱의 주 작업 공간이다 */
+const PANE_DEFAULT_SHARE = 2 / 3
+
+type Tab = 'all' | 'recent' | 'cached'
+
 function HomePage() {
   const { health, list } = Route.useLoaderData()
   const search = Route.useSearch()
@@ -73,15 +119,67 @@ function HomePage() {
   const router = useRouter()
   const [refreshing, setRefreshing] = useState(false)
   const [recent, addRecent] = useRecent()
+  const [tab, setTab] = useState<Tab>('all')
+  const [query, setQuery] = useState('')
+
+  const [surfaceRef, surfaceWidth] = useElementWidth<HTMLDivElement>()
+  const [listRef, listWidth] = useElementWidth<HTMLDivElement>()
+  const isMeasured = surfaceWidth > 0
+  const isSingleSurface = isMeasured && surfaceWidth < SINGLE_SURFACE_BELOW
+  const isStacked = listWidth > 0 && listWidth < STACK_ROWS_BELOW
+
+  // 사용자가 경계를 끌기 전까지는 화면 폭의 2/3로 맞춘다
+  const movedPane = useRef(false)
+  const placingPane = useRef(false)
+  const pane = useResizable({
+    defaultSize: '66%',
+    minSize: PANE_MIN_WIDTH,
+    maxSize: isMeasured
+      ? Math.max(PANE_MIN_WIDTH, surfaceWidth - LIST_MIN_WIDTH)
+      : undefined,
+    onSizeChange: () => {
+      if (!placingPane.current) movedPane.current = true
+    },
+  })
+  const { resize: resizePane } = pane
+  useLayoutEffect(() => {
+    if (movedPane.current || !isMeasured) return
+    placingPane.current = true
+    resizePane(Math.round(surfaceWidth * PANE_DEFAULT_SHARE))
+    placingPane.current = false
+  }, [isMeasured, surfaceWidth, resizePane])
+
+  const videos = list.ok ? list.value.videos : []
+  const recentVideos = useMemo(() => {
+    const byId = new Map(videos.map((v) => [v.id, v]))
+    return recent.flatMap((id) => byId.get(id) ?? [])
+  }, [videos, recent])
+  const cachedVideos = useMemo(() => videos.filter((v) => v.cached), [videos])
+
+  const visible = useMemo(() => {
+    const inTab =
+      tab === 'recent' ? recentVideos : tab === 'cached' ? cachedVideos : videos
+    const q = query.trim().toLowerCase()
+    return q === ''
+      ? inTab
+      : inTab.filter((v) => v.name.toLowerCase().includes(q))
+  }, [tab, videos, recentVideos, cachedVideos, query])
+
+  const openVideo = useCallback(
+    (v: string) => navigate({ search: (s) => ({ ...s, v }) }),
+    [navigate],
+  )
+  const closeVideo = () => navigate({ search: ({ v: _, ...s }) => s })
 
   if (health.ffmpeg === null) {
     return (
-      <main className="notice">
-        <h1>ffmpeg를 찾을 수 없습니다</h1>
-        <p>
-          설치 후 다시 열어 주세요: <code>brew install ffmpeg</code>
-        </p>
-      </main>
+      <Center height="100%">
+        <EmptyState
+          headingLevel={1}
+          title="ffmpeg를 찾을 수 없습니다"
+          description="brew install ffmpeg 로 설치한 뒤 다시 열어 주세요"
+        />
+      </Center>
     )
   }
 
@@ -94,58 +192,177 @@ function HomePage() {
     }
   }
 
-  return (
-    <div className="layout">
-      {list.ok ? (
-        <VideoList
-          list={list.value}
-          selectedId={search.v}
-          onSelect={(v) => navigate({ search: (s) => ({ ...s, v }) })}
-          onRefresh={refresh}
-          refreshing={refreshing}
-          recent={recent}
-        />
-      ) : (
-        <aside className="sidebar">
-          <p className="error">
-            {list.error.code === 'LIBRARY_NOT_FOUND'
-              ? '영상 폴더를 찾을 수 없습니다. .env의 FILM_DIR을 확인하세요.'
-              : list.error.message}
-          </p>
-          <p className="sidebar-dir">{health.filmDir}</p>
-          <button type="button" onClick={refresh}>
-            다시 시도
-          </button>
-        </aside>
-      )}
+  const isPaneFullWidth = isSingleSurface && search.v !== undefined
 
-      <main className="content">
-        {search.v === undefined ? (
-          <p className="empty">왼쪽 목록에서 영상을 고르세요</p>
-        ) : (
-          <SourcePanel
-            key={
-              search.m === 'scene'
-                ? `${search.v}-scene`
-                : `${search.v}-${search.i}`
-            }
-            id={search.v}
-            interval={search.i}
-            mode={search.m ?? 'even'}
-            formats={health.formats}
-            onInterval={(i) => navigate({ search: (s) => ({ ...s, i }) })}
-            onMode={(mode) =>
-              navigate({
-                search: ({ m: _, ...s }) =>
-                  mode === 'scene' ? { ...s, m: 'scene' as const } : s,
-              })
-            }
-            onMissing={refresh}
-            onOpened={addRecent}
-          />
-        )}
-      </main>
-    </div>
+  const source =
+    search.v === undefined ? undefined : (
+      <SourcePanel
+        key={
+          search.m === 'scene' ? `${search.v}-scene` : `${search.v}-${search.i}`
+        }
+        id={search.v}
+        interval={search.i}
+        mode={search.m ?? 'even'}
+        formats={health.formats}
+        onInterval={(i) => navigate({ search: (s) => ({ ...s, i }) })}
+        onMode={(mode) =>
+          navigate({
+            search: ({ m: _, ...s }) =>
+              mode === 'scene' ? { ...s, m: 'scene' as const } : s,
+          })
+        }
+        onMissing={refresh}
+        onOpened={addRecent}
+        onClose={closeVideo}
+      />
+    )
+
+  const tabs: ReadonlyArray<{ value: Tab; label: string; count: number }> = [
+    { value: 'all', label: '전체', count: videos.length },
+    { value: 'recent', label: '최근', count: recentVideos.length },
+    { value: 'cached', label: '썸네일 있음', count: cachedVideos.length },
+  ]
+
+  return (
+    <Layout
+      ref={surfaceRef}
+      height="fill"
+      header={
+        isPaneFullWidth ? undefined : (
+          <LayoutHeader padding={0}>
+            <VStack gap={0}>
+              <HStack gap={3} align="center" wrap="wrap" padding={4}>
+                <StackItem size="fill">
+                  <VStack gap={0.5}>
+                    <Heading level={1}>film</Heading>
+                    <Text type="supporting" maxLines={1}>
+                      {list.ok
+                        ? `${list.value.dir} · 영상 ${videos.length}개`
+                        : health.filmDir}
+                    </Text>
+                  </VStack>
+                </StackItem>
+                <TextInput
+                  type="search"
+                  label="파일명 검색"
+                  isLabelHidden
+                  placeholder="파일명 검색"
+                  value={query}
+                  onChange={setQuery}
+                  hasClear
+                  width={240}
+                />
+                <Button
+                  label={refreshing ? '읽는 중…' : '새로고침'}
+                  variant="ghost"
+                  onClick={refresh}
+                  isLoading={refreshing}
+                />
+              </HStack>
+              <VStack paddingInline={1}>
+                <TabList
+                  hasDivider
+                  value={tab}
+                  onChange={(value) => setTab(value as Tab)}
+                >
+                  {tabs.map((t) => (
+                    <Tab
+                      key={t.value}
+                      value={t.value}
+                      label={t.label}
+                      endContent={
+                        t.count === 0 ? undefined : (
+                          <Badge variant="neutral" label={t.count} />
+                        )
+                      }
+                    />
+                  ))}
+                </TabList>
+              </VStack>
+            </VStack>
+          </LayoutHeader>
+        )
+      }
+      content={
+        <LayoutContent ref={listRef} padding={4} label="영상 목록">
+          {isPaneFullWidth ? (
+            source
+          ) : !list.ok ? (
+            <VStack gap={3}>
+              <Banner
+                status="error"
+                title={
+                  list.error.code === 'LIBRARY_NOT_FOUND'
+                    ? '영상 폴더를 찾을 수 없습니다'
+                    : list.error.message
+                }
+                description={
+                  list.error.code === 'LIBRARY_NOT_FOUND'
+                    ? `.env의 FILM_DIR을 확인하세요 (${health.filmDir})`
+                    : undefined
+                }
+                endContent={<Button label="다시 시도" onClick={refresh} />}
+              />
+            </VStack>
+          ) : visible.length === 0 ? (
+            <VStack padding={6}>
+              <EmptyState
+                title={
+                  query.trim() !== ''
+                    ? '일치하는 파일이 없습니다'
+                    : tab === 'recent'
+                      ? '최근 연 영상이 없습니다'
+                      : tab === 'cached'
+                        ? '썸네일을 만든 영상이 없습니다'
+                        : '이 폴더에 영상이 없습니다'
+                }
+                description={
+                  query.trim() !== ''
+                    ? `“${query}”`
+                    : tab === 'all'
+                      ? '.mp4 .webm .mkv .mov 파일을 넣고 새로고침하세요'
+                      : undefined
+                }
+                actions={
+                  tab === 'all' ? undefined : (
+                    <Button label="전체 보기" onClick={() => setTab('all')} />
+                  )
+                }
+              />
+            </VStack>
+          ) : (
+            <VideoTable
+              videos={visible}
+              openId={search.v}
+              onOpen={openVideo}
+              isStacked={isStacked}
+            />
+          )}
+        </LayoutContent>
+      }
+      end={
+        isSingleSurface || source === undefined ? undefined : (
+          <>
+            <ResizeHandle
+              direction="horizontal"
+              isReversed
+              hasDivider
+              pillPlacement="end"
+              resizable={pane.props}
+              label="썸네일 창 크기 조절"
+            />
+            <LayoutPanel
+              resizable={pane.props}
+              padding={5}
+              role="complementary"
+              label="썸네일"
+            >
+              {source}
+            </LayoutPanel>
+          </>
+        )
+      }
+    />
   )
 }
 
@@ -165,6 +382,7 @@ function SourcePanel(props: {
   readonly onMissing: () => void
   /** 열기에 성공하면 최근 목록에 넣는다 */
   readonly onOpened: (id: string) => void
+  readonly onClose: () => void
 }) {
   const { id, interval, mode } = props
   const [state, setState] = useState<OpenState>({ status: 'loading' })
@@ -188,30 +406,48 @@ function SourcePanel(props: {
     }
   }, [id, interval, mode, attempt])
 
+  const close = (
+    <HStack justify="end">
+      <Button label="닫기" variant="ghost" size="sm" onClick={props.onClose} />
+    </HStack>
+  )
+
   if (state.status === 'loading') {
     return mode === 'scene' ? (
       <SceneAnalyzing />
     ) : (
-      <p className="empty">여는 중…</p>
+      <Center height="100%">
+        <HStack gap={2} align="center">
+          <Spinner />
+          <Text color="secondary">여는 중…</Text>
+        </HStack>
+      </Center>
     )
   }
   if (state.status === 'error') {
     const { code, message } = state.error
     return (
-      <div className="notice">
-        <p className="error">
-          {code === 'FILE_NOT_FOUND'
-            ? '파일을 찾을 수 없습니다. 목록을 새로고침하세요.'
-            : code === 'NOT_A_VIDEO'
-              ? '지원하지 않는 파일입니다.'
-              : message}
-        </p>
-        {code === 'FILE_NOT_FOUND' && (
-          <button type="button" onClick={props.onMissing}>
-            목록 새로고침
-          </button>
-        )}
-      </div>
+      <VStack gap={3}>
+        {close}
+        <Banner
+          status="error"
+          title={
+            code === 'FILE_NOT_FOUND'
+              ? '파일을 찾을 수 없습니다'
+              : code === 'NOT_A_VIDEO'
+                ? '지원하지 않는 파일입니다'
+                : message
+          }
+          description={
+            code === 'FILE_NOT_FOUND' ? '목록을 새로고침하세요' : undefined
+          }
+          endContent={
+            code === 'FILE_NOT_FOUND' ? (
+              <Button label="목록 새로고침" onClick={props.onMissing} />
+            ) : undefined
+          }
+        />
+      </VStack>
     )
   }
   return (
@@ -223,6 +459,7 @@ function SourcePanel(props: {
       onInterval={props.onInterval}
       onMode={props.onMode}
       onLost={() => attempt === 0 && setAttempt(1)}
+      onClose={props.onClose}
     />
   )
 }
@@ -235,11 +472,15 @@ function SceneAnalyzing() {
     return () => clearInterval(timer)
   }, [])
   return (
-    <p className="empty">
-      장면 전환을 찾는 중… {seconds > 0 && `${seconds}초`}
-      <br />
-      처음 한 번은 영상 전체를 읽습니다 (4분 1080p 기준 수 초)
-    </p>
+    <Center height="100%">
+      <VStack gap={2} align="center">
+        <Spinner size="lg" />
+        <Text>장면 전환을 찾는 중… {seconds > 0 && `${seconds}초`}</Text>
+        <Text type="supporting">
+          처음 한 번은 영상 전체를 읽습니다 (4분 1080p 기준 수 초)
+        </Text>
+      </VStack>
+    </Center>
   )
 }
 
@@ -252,6 +493,7 @@ function SourceView(props: {
   readonly onInterval: (i: ThumbInterval) => void
   readonly onMode: (mode: ThumbMode) => void
   readonly onLost: () => void
+  readonly onClose: () => void
 }) {
   // 구간 재생성·전체 보기로 세트가 바뀐다. 처음 연 세트는 props.info
   const [info, setInfo] = useState(props.info)
@@ -347,8 +589,7 @@ function SourceView(props: {
     if (selected === undefined) return
     const frame = 1 / (info.fps > 0 ? info.fps : 30)
     const onKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null
-      if (target?.closest('input, select, textarea')) return
+      if (isTextEntry(e.target)) return
       if (e.altKey || e.metaKey || e.ctrlKey) return
       const step =
         e.key === ','
@@ -369,71 +610,88 @@ function SourceView(props: {
   }, [selected, info.fps])
 
   return (
-    <section className="source">
-      <header className="source-head">
-        <h2>{info.name}</h2>
-        <p className="source-meta">
-          {formatTimecode(info.duration)} · {info.width}×{info.height} ·{' '}
-          {info.fps} fps · {info.codec}
-        </p>
-        <span className="modes" role="radiogroup" aria-label="썸네일 방식">
-          {(['even', 'scene'] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={props.mode === m}
-              onClick={() => props.onMode(m)}
-              disabled={busy}
-            >
-              {m === 'even' ? '균등' : '장면'}
-            </button>
-          ))}
-        </span>
-        {props.mode === 'even' && (
-          <label className="count">
-            간격
-            <select
-              value={props.interval}
-              onChange={(e) =>
-                props.onInterval(Number(e.target.value) as ThumbInterval)
+    <VStack as="section" gap={5}>
+      <VStack as="header" gap={3}>
+        <HStack gap={3} align="start">
+          <StackItem size="fill">
+            <VStack gap={1}>
+              <Heading level={2} maxLines={1}>
+                {info.name}
+              </Heading>
+              <Text type="supporting" hasTabularNumbers>
+                {formatTimecode(info.duration)} · {info.width}×{info.height} ·{' '}
+                {info.fps} fps · {info.codec}
+              </Text>
+            </VStack>
+          </StackItem>
+          <Button
+            label="닫기"
+            variant="ghost"
+            size="sm"
+            onClick={props.onClose}
+          />
+        </HStack>
+        <HStack gap={3} wrap="wrap" align="center">
+          <SegmentedControl
+            value={props.mode}
+            onChange={(m) => props.onMode(m as ThumbMode)}
+            isDisabled={busy}
+            label="썸네일 방식"
+          >
+            <SegmentedControlItem value="even" label="균등" />
+            <SegmentedControlItem value="scene" label="장면" />
+          </SegmentedControl>
+          {props.mode === 'even' && (
+            <Selector
+              label="간격"
+              isLabelHidden
+              variant="secondary"
+              value={String(props.interval)}
+              options={INTERVALS.map((i) => ({
+                value: String(i),
+                label: `${i}초마다`,
+              }))}
+              onChange={(v) => props.onInterval(Number(v) as ThumbInterval)}
+              isDisabled={info.range !== undefined}
+            />
+          )}
+          <VStack width={240}>
+            <ProgressBar
+              label="썸네일 생성 진행률"
+              isLabelHidden
+              hasValueLabel
+              max={Math.max(1, events.total)}
+              value={events.done}
+              variant={events.finished ? 'success' : 'accent'}
+              formatValueLabel={() =>
+                events.finished ? '완료' : `${events.done}/${events.total}`
               }
-              disabled={info.range !== undefined}
-            >
-              {INTERVALS.map((i) => (
-                <option key={i} value={i}>
-                  {i}초마다
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <progress
-          max={events.total}
-          value={events.done}
-          aria-label="썸네일 생성 진행률"
-        />
-        <span className="progress-text">
-          {events.finished ? '완료' : `${events.done}/${events.total}`}
-        </span>
-        {props.mode === 'scene' && info.range === undefined && (
-          <span className="scene-note">
-            {info.mode === 'even'
-              ? '장면 전환을 찾지 못해 균등 분할로 보여줍니다'
-              : `장면 전환 ${info.times.length}곳`}
-          </span>
-        )}
-        {info.range && (
-          <span className="range">
-            구간 {formatTimecode(info.range.from)} ~{' '}
-            {formatTimecode(info.range.to)}
-            <button type="button" onClick={backToFull} disabled={busy}>
-              전체 보기
-            </button>
-          </span>
-        )}
-        {error && <span className="error">{error}</span>}
-      </header>
+            />
+          </VStack>
+          {props.mode === 'scene' && info.range === undefined && (
+            <Text type="supporting" data-scene-note>
+              {info.mode === 'even'
+                ? '장면 전환을 찾지 못해 균등 분할로 보여줍니다'
+                : `장면 전환 ${info.times.length}곳`}
+            </Text>
+          )}
+          {info.range && (
+            <HStack gap={2} align="center" data-range>
+              <Text type="supporting" hasTabularNumbers>
+                구간 {formatTimecode(info.range.from)} ~{' '}
+                {formatTimecode(info.range.to)}
+              </Text>
+              <Button
+                size="sm"
+                label="전체 보기"
+                onClick={backToFull}
+                isDisabled={busy}
+              />
+            </HStack>
+          )}
+        </HStack>
+        {error && <Banner status="error" title={error} />}
+      </VStack>
 
       {previewT !== undefined && (
         <FramePreview
@@ -460,6 +718,6 @@ function SourceView(props: {
         onRetry={(index) => void retry(index)}
         retrying={retrying}
       />
-    </section>
+    </VStack>
   )
 }

@@ -1,6 +1,31 @@
 import { useEffect } from 'react'
+import { AspectRatio } from '@astryxdesign/core/AspectRatio'
+import { Button } from '@astryxdesign/core/Button'
+import { Center } from '@astryxdesign/core/Center'
+import { Grid } from '@astryxdesign/core/Grid'
+import { HStack } from '@astryxdesign/core/HStack'
+import { SelectableCard } from '@astryxdesign/core/SelectableCard'
+import { Skeleton } from '@astryxdesign/core/Skeleton'
+import { Text } from '@astryxdesign/core/Text'
+import { Token } from '@astryxdesign/core/Token'
+import { VStack } from '@astryxdesign/core/VStack'
 import type { ThumbState } from '../hooks/useSourceEvents.ts'
+import { isTextEntry } from '../lib/keyboard.ts'
 import { formatTimecode } from '../lib/timecode.ts'
+
+/** 이미지 모서리 (AspectRatio가 overflow: clip이라 그대로 잘린다) */
+const ROUNDED = { borderRadius: 'var(--radius-element)' }
+/**
+ * 시간 표시 줄: 이미지 위에 겹치되 클릭을 가로채지 않는다.
+ * AspectRatio는 감싸는 칸만 absolute라, 겹칠 줄은 직접 띄운다
+ */
+/** 밝은 이미지 위에서도 읽히도록 기본(반투명) 대신 불투명 배경 */
+const ON_IMAGE = { backgroundColor: 'var(--color-background-popover)' }
+const OVERLAY = {
+  position: 'absolute',
+  inset: 0,
+  pointerEvents: 'none',
+} as const
 
 interface Props {
   readonly times: ReadonlyArray<number>
@@ -30,8 +55,7 @@ export function ThumbnailGrid({
       const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
       // Shift+←/→는 미리보기의 ±1초 이동
       if (step === 0 || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return
-      const target = e.target as HTMLElement | null
-      if (target?.closest('input, select, textarea')) return
+      if (isTextEntry(e.target)) return
       e.preventDefault()
       const next = selected === undefined ? 0 : selected + step
       if (next >= 0 && next < times.length) {
@@ -46,49 +70,54 @@ export function ThumbnailGrid({
   }, [selected, times.length, onSelect])
 
   return (
-    <ol className="grid" aria-label="썸네일">
+    <Grid columns={{ minWidth: 200, max: 12 }} gap={3}>
       {times.map((t, i) => {
         const thumb = thumbs[i]
+        const time = formatTimecode(t)
         return (
-          <li key={i} className="card-cell">
-            <button
-              id={`thumb-${i}`}
-              type="button"
-              className="card"
-              aria-pressed={i === selected}
-              onClick={() => onSelect(i)}
-              title={thumb?.status === 'error' ? thumb.message : undefined}
-            >
-              <span className="card-image" style={{ aspectRatio: aspect }}>
-                {thumb === undefined ? (
-                  <span className="skeleton" aria-label="생성 중" />
-                ) : thumb.status === 'ready' ? (
-                  <img
-                    src={thumb.url}
-                    alt=""
-                    loading="lazy"
-                    draggable={false}
-                  />
-                ) : (
-                  <span className="card-error">⚠ 추출 실패</span>
-                )}
-              </span>
-              <span className="card-time">{formatTimecode(t)}</span>
-            </button>
-            {thumb?.status === 'error' && (
-              // 카드 버튼 안에 버튼을 넣을 수 없어 겹쳐서 배치한다
-              <button
-                type="button"
-                className="card-retry"
-                onClick={() => onRetry(i)}
-                disabled={retrying.has(i)}
+          <SelectableCard
+            key={i}
+            id={`thumb-${i}`}
+            label={`${time} 썸네일`}
+            isSelected={i === selected}
+            onChange={() => onSelect(i)}
+            variant="transparent"
+            padding={1}
+          >
+            <AspectRatio ratio={aspect} fit="cover" style={ROUNDED}>
+              {thumb === undefined ? (
+                <Skeleton index={i % 12} radius="none" />
+              ) : thumb.status === 'ready' ? (
+                <img src={thumb.url} alt="" loading="lazy" draggable={false} />
+              ) : (
+                <Center padding={2}>
+                  <VStack gap={1} align="center">
+                    <Text type="supporting" maxLines={2}>
+                      추출 실패: {thumb.message}
+                    </Text>
+                    <Button
+                      size="sm"
+                      label={retrying.has(i) ? '다시 만드는 중…' : '재시도'}
+                      onClick={() => onRetry(i)}
+                      isLoading={retrying.has(i)}
+                    />
+                  </VStack>
+                </Center>
+              )}
+              {/* 이미지 위 오른쪽 위에 겹친다. 클릭은 아래(카드·재시도 버튼)로 통과 */}
+              <HStack
+                justify="end"
+                align="start"
+                padding={1}
+                style={OVERLAY}
+                data-time={time}
               >
-                {retrying.has(i) ? '다시 만드는 중…' : '재시도'}
-              </button>
-            )}
-          </li>
+                <Token size="sm" label={time} style={ON_IMAGE} />
+              </HStack>
+            </AspectRatio>
+          </SelectableCard>
         )
       })}
-    </ol>
+    </Grid>
   )
 }

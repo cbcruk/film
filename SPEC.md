@@ -120,7 +120,8 @@ FILM_DIR=~/Movies/MV
 - **F4-1** 미리보기에서 ±1프레임, ±1초 이동 버튼. — M5 ✅
   - 단축키: `,` / `.` = ±1프레임, `Shift+←/→` = ±1초 (`←/→`는 썸네일 선택). 1프레임 = `1/fps`.
   - 이동한 시점은 밀리초로 반올림하고 `0 ≤ t < duration`으로 제한한다.
-- **F1-7** 최근 연 파일: 목록 위에 최근 5개 (브라우저 `localStorage`에 최대 10개 ID). 지금 목록에 없는 ID(삭제·변경)는 숨긴다. — M5 ✅
+- **F1-7** 최근 연 파일: 목록의 [최근] 탭 (브라우저 `localStorage`에 최대 10개 ID, 최신순). 지금 목록에 없는 ID(삭제·변경)는 숨긴다. — M5 ✅
+- **F1-8** 화면 구조 (Astryx `table-inbox` 템플릿): 상단에 제목·검색·새로고침과 [전체 / 최근 / 썸네일 있음] 탭, 아래에 영상 표(파일·크기·수정일, 머리글을 눌러 정렬, 썸네일이 있으면 행 앞에 점). 행을 누르거나 Enter로 열면 오른쪽 창(끌어서 너비 조절, 기본 2/3)에 썸네일·미리보기가 열리고 [닫기]로 닫는다. 화면 폭이 900px 미만이면 연 영상이 화면 전체를 쓴다. 영상을 저절로 열지 않는다 (열면 썸네일 생성이 시작되므로).
 
 ### F5. 저장 — MVP
 
@@ -212,12 +213,13 @@ film/
       types.ts                                   # 서버 응답·SSE 이벤트 타입, 에러 코드 유니온
       server-error.ts                            # ServerError 클래스 + 직렬화 어댑터 (클라이언트에서도 복원)
     components/
-      VideoList.tsx
+      VideoTable.tsx                             # 영상 표 (정렬, 썸네일 표시, 행 열기)
       ThumbnailGrid.tsx
       FramePreview.tsx
     hooks/
       useSourceEvents.ts                         # EventSource 구독
       useRecent.ts                               # 최근 연 파일 (localStorage)
+      useElementWidth.ts                         # 요소 폭 측정 (나란히/전체 화면 전환)
   test/
     global-setup.ts                              # 픽스처 영상 생성 (vitest globalSetup)
     fixtures/                                    # 생성된 픽스처 (git 제외). 다시 만들려면 폴더 삭제

@@ -5,6 +5,10 @@ import {
   Scripts,
   createRootRoute,
 } from '@tanstack/react-router'
+import { EmptyState } from '@astryxdesign/core/EmptyState'
+import { Theme } from '@astryxdesign/core/theme'
+import { VStack } from '@astryxdesign/core/VStack'
+import { defaultThemeSlug, themes } from '../astryx-themes.ts'
 import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
@@ -17,7 +21,7 @@ export const Route = createRootRoute({
     links: [{ rel: 'stylesheet', href: appCss }],
   }),
   component: RootComponent,
-  notFoundComponent: () => <p className="notice">페이지를 찾을 수 없습니다</p>,
+  notFoundComponent: () => <EmptyState title="페이지를 찾을 수 없습니다" />,
 })
 
 function RootComponent() {
@@ -35,7 +39,10 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <HeadContent />
       </head>
       <body>
-        {children}
+        <Theme theme={themes[defaultThemeSlug]}>
+          {/* 화면 높이에 맞춰 목록·본문이 각자 스크롤된다 */}
+          <VStack height="100dvh">{children}</VStack>
+        </Theme>
         <Scripts />
       </body>
     </html>
