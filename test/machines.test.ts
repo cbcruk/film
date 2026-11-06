@@ -30,6 +30,7 @@ const info = (
   height: 360,
   fps: 30,
   codec: 'h264',
+  cached: [],
   ...extra,
 })
 
@@ -118,6 +119,17 @@ describe('source 머신', () => {
     expect(s.context.thumbs[1]).toEqual({ status: 'ready', url: '/t1' })
     expect(s.context.done).toBe(2)
     expect(s.matches({ ready: { stream: 'finished' } })).toBe(true)
+  })
+
+  it('캐시에 있던 칸은 SSE를 기다리지 않고 바로 채운다', async () => {
+    const { actor } = fakeSource({
+      open: () => Promise.resolve(info('s1', [0, 10, 20], { cached: [0, 2] })),
+    })
+    actor.start()
+    await ready(actor)
+    const { thumbs, done } = actor.getSnapshot().context
+    expect(thumbs.map((t) => t?.status)).toEqual(['ready', undefined, 'ready'])
+    expect(done).toBe(2)
   })
 
   it('열기에 실패하면 failed로 가고 오류 코드를 남긴다', async () => {

@@ -184,14 +184,17 @@ describe('Jobs', () => {
     return Effect.gen(function* () {
       const run = Effect.gen(function* () {
         const { a } = yield* ids
-        yield* (yield* Jobs).open({ id: a, interval: 10 })
-        return yield* collectEvents(a)
+        const info = yield* (yield* Jobs).open({ id: a, interval: 10 })
+        return { info, events: yield* collectEvents(a) }
       })
-      yield* run.pipe(Effect.provide(first.layer))
-      const events = yield* run.pipe(Effect.provide(second.layer))
+      const before = yield* run.pipe(Effect.provide(first.layer))
+      const after = yield* run.pipe(Effect.provide(second.layer))
       assert.strictEqual(first.stats.calls, 12)
       assert.strictEqual(second.stats.calls, 0)
-      assert.strictEqual(ofType(events, 'thumb').length, 12)
+      assert.strictEqual(ofType(after.events, 'thumb').length, 12)
+      // 처음엔 캐시에 없고, 다시 열면 응답에 캐시에 있는 칸이 모두 들어 있다
+      assert.deepStrictEqual(before.info.cached, [])
+      assert.deepStrictEqual(after.info.cached, [...Array(12).keys()])
     })
   })
 

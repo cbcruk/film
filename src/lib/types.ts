@@ -70,6 +70,8 @@ export interface SourceInfo extends VideoMeta {
   readonly sceneCuts?: number
   /** 구간 재생성 세트면 그 구간 (전체 세트면 없음) */
   readonly range?: { readonly from: number; readonly to: number }
+  /** 응답 시점에 이미 캐시에 있는 칸 (index). 화면은 이 칸들을 기다리지 않고 바로 그린다 */
+  readonly cached: ReadonlyArray<number>
 }
 
 /** 썸네일 한 장 재시도 결과 */

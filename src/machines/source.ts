@@ -19,6 +19,7 @@ import {
   spawnChild,
   stopChild,
 } from 'xstate'
+import { thumbUrl } from '../lib/timecode.ts'
 import type {
   ErrorBody,
   ErrorCode,
@@ -136,14 +137,22 @@ const defaultFormat = (formats: ReadonlyArray<FrameFormat>): FrameFormat =>
   formats.includes('png') ? 'png' : (formats[0] ?? 'png')
 
 /** 새 세트를 받았을 때: 썸네일·진행률·선택을 비운다 */
-const freshSet = (info: SourceInfo) => ({
-  info,
-  thumbs: Array.from({ length: info.times.length }, () => undefined),
-  done: 0,
-  selected: undefined,
-  offset: 0,
-  retrying: new Set<number>(),
-})
+/** 새 세트로 시작. 캐시에 있던 칸은 SSE를 기다리지 않고 바로 채운다 */
+const freshSet = (info: SourceInfo) => {
+  const cached = new Set(info.cached)
+  return {
+    info,
+    thumbs: info.times.map((t, index): ThumbState | undefined =>
+      cached.has(index)
+        ? { status: 'ready', url: thumbUrl(info.id, t) }
+        : undefined,
+    ),
+    done: cached.size,
+    selected: undefined,
+    offset: 0,
+    retrying: new Set<number>(),
+  }
+}
 
 /** 서버 호출과 SSE 구독. 입력·출력 타입만 정해 두고 구현은 source.live.ts */
 export const sourceActors = {

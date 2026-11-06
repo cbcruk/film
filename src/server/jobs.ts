@@ -43,7 +43,8 @@ import { Library } from './library.ts'
 
 /** 지금 열린 소스와 그 썸네일 세트. 로컬 단일 사용자 도구라 한 번에 하나만 둔다 */
 interface Job {
-  readonly info: SourceInfo
+  /** 세트 정보. 캐시에 있는 칸(cached)은 응답할 때마다 새로 확인한다 (describe) */
+  readonly info: Omit<SourceInfo, 'cached'>
   readonly file: string
   /** 요청한 방식·개수 (장면 모드는 실제 장수가 적거나 균등으로 대신될 수 있어 요청 기준으로 재사용) */
   readonly requested: {
@@ -161,6 +162,22 @@ export class Jobs extends Context.Service<
           })
         })
 
+      /** 응답용 세트 정보: 지금 캐시에 있는 칸을 덧붙인다 */
+      const describe = (job: Job) =>
+        Effect.gen(function* () {
+          const { id, times } = job.info
+          const found = yield* Effect.forEach(
+            times,
+            (t) => cache.exists(cache.thumbPath(id, t)),
+            { concurrency: 16 },
+          )
+          const info: SourceInfo = {
+            ...job.info,
+            cached: found.flatMap((hit, index) => (hit ? [index] : [])),
+          }
+          return info
+        })
+
       const generate = (job: Job) =>
         Effect.gen(function* () {
           const { id, setId, times } = job.info
@@ -243,7 +260,7 @@ export class Jobs extends Context.Service<
         cuts: ReadonlyArray<SceneCut> | undefined,
       ) {
         const existing = yield* reusable(input)
-        if (Option.isSome(existing)) return existing.value.info
+        if (Option.isSome(existing)) return yield* describe(existing.value)
 
         const file = yield* library.resolve(input.id)
         const meta = yield* loadMeta(input.id, file)
@@ -308,8 +325,10 @@ export class Jobs extends Context.Service<
         }
         // 구독자가 바로 찾을 수 있도록 작업을 먼저 등록한 뒤 시작한다
         yield* Ref.set(current, Option.some(job))
+        // 생성을 시작하기 전에 확인한다 (그 뒤에 생긴 칸은 SSE로 받는다)
+        const info = yield* describe(job)
         yield* FiberHandle.run(running, generate(job))
-        return job.info
+        return info
       })
 
       const notOpen = new FileNotFound({
