@@ -1,10 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { FramePreview, useFrameFormat } from '../components/FramePreview.tsx'
 import { ThumbnailGrid } from '../components/ThumbnailGrid.tsx'
 import { VideoList } from '../components/VideoList.tsx'
 import { getHealth } from '../functions/health.ts'
-import { listVideos, openSource } from '../functions/sources.ts'
+import {
+  createSet,
+  listVideos,
+  openSource,
+  retryThumb,
+} from '../functions/sources.ts'
+import { useRecent } from '../hooks/useRecent.ts'
 import { useSourceEvents } from '../hooks/useSourceEvents.ts'
 import { ServerError } from '../lib/server-error.ts'
 import { formatTimecode } from '../lib/timecode.ts'
@@ -55,6 +61,7 @@ function HomePage() {
   const navigate = Route.useNavigate()
   const router = useRouter()
   const [refreshing, setRefreshing] = useState(false)
+  const [recent, addRecent] = useRecent()
 
   if (health.ffmpeg === null) {
     return (
@@ -85,6 +92,7 @@ function HomePage() {
           onSelect={(v) => navigate({ search: (s) => ({ ...s, v }) })}
           onRefresh={refresh}
           refreshing={refreshing}
+          recent={recent}
         />
       ) : (
         <aside className="sidebar">
@@ -111,6 +119,7 @@ function HomePage() {
             formats={health.formats}
             onCount={(n) => navigate({ search: (s) => ({ ...s, n }) })}
             onMissing={refresh}
+            onOpened={addRecent}
           />
         )}
       </main>
@@ -130,6 +139,8 @@ function SourcePanel(props: {
   readonly onCount: (n: ThumbCount) => void
   /** 파일이 사라졌을 때 목록을 다시 읽는다 */
   readonly onMissing: () => void
+  /** 열기에 성공하면 최근 목록에 넣는다 */
+  readonly onOpened: (id: string) => void
 }) {
   const { id, count } = props
   const [state, setState] = useState<OpenState>({ status: 'loading' })
@@ -140,7 +151,11 @@ function SourcePanel(props: {
     let active = true
     setState({ status: 'loading' })
     openSource({ data: { id, count } }).then(
-      (info) => active && setState({ status: 'ready', info }),
+      (info) => {
+        if (!active) return
+        setState({ status: 'ready', info })
+        props.onOpened(info.id)
+      },
       (error: unknown) =>
         active && setState({ status: 'error', error: toErrorBody(error) }),
     )
@@ -185,16 +200,120 @@ function SourceView(props: {
   readonly onCount: (n: ThumbCount) => void
   readonly onLost: () => void
 }) {
-  const { info } = props
+  // 구간 재생성·전체 보기로 세트가 바뀐다. 처음 연 세트는 props.info
+  const [info, setInfo] = useState(props.info)
   const events = useSourceEvents(info.id, info.setId, info.times.length)
   const [selected, setSelected] = useState<number | undefined>(undefined)
+  // 선택한 썸네일 기준 ±이동량 (초)
+  const [offset, setOffset] = useState(0)
   const [format, setFormat] = useFrameFormat(props.formats)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+  const [retrying, setRetrying] = useState<ReadonlySet<number>>(new Set())
+
   const selectedThumb =
     selected === undefined ? undefined : events.thumbs[selected]
+  const base = selected === undefined ? undefined : info.times[selected]
+  // 영상 범위 안으로, 밀리초 단위
+  const previewT =
+    base === undefined
+      ? undefined
+      : Math.min(
+          Math.max(0, Math.round((base + offset) * 1000) / 1000),
+          Math.floor(info.duration * 1000 - 1) / 1000,
+        )
+
+  const select = useCallback((index: number | undefined) => {
+    setSelected(index)
+    setOffset(0)
+  }, [])
 
   useEffect(() => {
     if (events.lost) props.onLost()
   }, [events.lost])
+
+  const run = async (task: () => Promise<SourceInfo>) => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      const next = await task()
+      setInfo(next)
+      select(undefined)
+    } catch (e) {
+      setError(toErrorBody(e).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // 선택한 칸의 앞뒤 썸네일 사이 (끝 칸이면 세트 구간·영상 끝까지)
+  const more =
+    selected === undefined
+      ? undefined
+      : () => {
+          const from = info.times[selected - 1] ?? info.range?.from ?? 0
+          const to = info.times[selected + 1] ?? info.range?.to ?? info.duration
+          void run(() =>
+            createSet({
+              data: {
+                id: info.id,
+                count: info.times.length as ThumbCount,
+                from,
+                to,
+              },
+            }),
+          )
+        }
+
+  const backToFull = () =>
+    run(() =>
+      openSource({
+        data: { id: info.id, count: info.times.length as ThumbCount },
+      }),
+    )
+
+  const retry = async (index: number) => {
+    setRetrying((r) => new Set(r).add(index))
+    try {
+      events.apply(
+        await retryThumb({ data: { id: info.id, setId: info.setId, index } }),
+      )
+    } catch (e) {
+      setError(toErrorBody(e).message)
+    } finally {
+      setRetrying((r) => {
+        const next = new Set(r)
+        next.delete(index)
+        return next
+      })
+    }
+  }
+
+  // ,/. = ±1프레임, Shift+←/→ = ±1초 (선택한 썸네일이 있을 때)
+  useEffect(() => {
+    if (selected === undefined) return
+    const frame = 1 / (info.fps > 0 ? info.fps : 30)
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest('input, select, textarea')) return
+      if (e.altKey || e.metaKey || e.ctrlKey) return
+      const step =
+        e.key === ','
+          ? -frame
+          : e.key === '.'
+            ? frame
+            : e.shiftKey && e.key === 'ArrowLeft'
+              ? -1
+              : e.shiftKey && e.key === 'ArrowRight'
+                ? 1
+                : 0
+      if (step === 0) return
+      e.preventDefault()
+      setOffset((o) => o + step)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selected, info.fps])
 
   return (
     <section className="source">
@@ -211,6 +330,7 @@ function SourceView(props: {
             onChange={(e) =>
               props.onCount(Number(e.target.value) as ThumbCount)
             }
+            disabled={info.range !== undefined}
           >
             {COUNTS.map((n) => (
               <option key={n} value={n}>
@@ -227,18 +347,31 @@ function SourceView(props: {
         <span className="progress-text">
           {events.finished ? '완료' : `${events.done}/${events.total}`}
         </span>
+        {info.range && (
+          <span className="range">
+            구간 {formatTimecode(info.range.from)} ~{' '}
+            {formatTimecode(info.range.to)}
+            <button type="button" onClick={backToFull} disabled={busy}>
+              전체 보기
+            </button>
+          </span>
+        )}
+        {error && <span className="error">{error}</span>}
       </header>
 
-      {selected !== undefined && (
+      {previewT !== undefined && (
         <FramePreview
           info={info}
-          t={info.times[selected]!}
+          t={previewT}
           placeholder={
             selectedThumb?.status === 'ready' ? selectedThumb.url : undefined
           }
           format={format}
           formats={props.formats}
           onFormat={setFormat}
+          onStep={(seconds) => setOffset((o) => o + seconds)}
+          onMore={more}
+          busy={busy}
         />
       )}
 
@@ -247,7 +380,9 @@ function SourceView(props: {
         thumbs={events.thumbs}
         aspect={info.width / info.height}
         selected={selected}
-        onSelect={setSelected}
+        onSelect={select}
+        onRetry={(index) => void retry(index)}
+        retrying={retrying}
       />
     </section>
   )

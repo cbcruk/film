@@ -12,6 +12,12 @@ export const thumbnailTimes = (duration: number, count: number) => {
   )
 }
 
+/** from~to 사이를 count장으로 나눈 시점. 양 끝(이미 본 장면)은 빼고 안쪽만 */
+export const rangeTimes = (from: number, to: number, count: number) =>
+  Array.from({ length: count }, (_, i) =>
+    Number(timeKey(from + ((to - from) * (i + 1)) / (count + 1))),
+  )
+
 const pad = (n: number, width = 2) => String(n).padStart(width, '0')
 
 const split = (t: number) => {

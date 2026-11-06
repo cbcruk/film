@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { eventsUrl } from '../lib/timecode.ts'
-import type { ErrorCode, SourceEvent } from '../lib/types.ts'
+import type { ErrorCode, RetryResult, SourceEvent } from '../lib/types.ts'
 
 export type ThumbState =
   | { readonly status: 'ready'; readonly url: string }
@@ -18,9 +18,24 @@ export interface SourceEventsState {
   readonly finished: boolean
   /** 서버가 이 소스를 모른다 (서버 재시작 등) → openSource를 다시 호출해야 함 */
   readonly lost: boolean
+  /** 재시도 결과처럼 SSE 밖에서 받은 이벤트를 반영한다 */
+  readonly apply: (event: RetryResult) => void
 }
 
-const initial = (total: number): SourceEventsState => ({
+type State = Omit<SourceEventsState, 'apply'>
+
+const toThumb = (event: RetryResult): ThumbState =>
+  event.type === 'thumb'
+    ? { status: 'ready', url: event.url }
+    : { status: 'error', code: event.code, message: event.message }
+
+const withThumb = (s: State, index: number, thumb: ThumbState): State => {
+  const thumbs = [...s.thumbs]
+  thumbs[index] = thumb
+  return { ...s, thumbs }
+}
+
+const initial = (total: number): State => ({
   thumbs: Array.from({ length: total }, () => undefined),
   done: 0,
   total,
@@ -51,17 +66,11 @@ export const useSourceEvents = (
         if (event.setId === setId) handle(event)
       })
 
-    const setThumb = (index: number, thumb: ThumbState) =>
-      setState((s) => {
-        const thumbs = [...s.thumbs]
-        thumbs[index] = thumb
-        return { ...s, thumbs }
-      })
-
-    on('thumb', (e) => setThumb(e.index, { status: 'ready', url: e.url }))
+    on('thumb', (e) => setState((s) => withThumb(s, e.index, toThumb(e))))
     on('error', (e) => {
-      if (e.index !== undefined) {
-        setThumb(e.index, { status: 'error', code: e.code, message: e.message })
+      const { index } = e
+      if (index !== undefined) {
+        setState((s) => withThumb(s, index, toThumb({ ...e, index })))
       }
     })
     on('progress', (e) =>
@@ -83,5 +92,14 @@ export const useSourceEvents = (
     return () => source.close()
   }, [id, setId, total])
 
-  return state
+  const apply = useCallback(
+    (event: RetryResult) => {
+      if (event.setId === setId) {
+        setState((s) => withThumb(s, event.index, toThumb(event)))
+      }
+    },
+    [setId],
+  )
+
+  return { ...state, apply }
 }

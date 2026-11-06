@@ -12,13 +12,20 @@ import {
   Semaphore,
   Stream,
 } from 'effect'
-import { thumbUrl, thumbnailTimes } from '../lib/timecode.ts'
-import type { SourceEvent, SourceInfo, ThumbCount } from '../lib/types.ts'
+import { rangeTimes, thumbUrl, thumbnailTimes } from '../lib/timecode.ts'
+import type {
+  RetryResult,
+  SourceEvent,
+  SourceInfo,
+  ThumbCount,
+  VideoMeta,
+} from '../lib/types.ts'
 import { Cache } from './cache.ts'
 import { AppConfig } from './config.ts'
 import {
   type FfmpegTimeout,
   FileNotFound,
+  InvalidParam,
   type NotAVideo,
   toErrorBody,
 } from './errors.ts'
@@ -50,6 +57,19 @@ export class Jobs extends Context.Service<
     readonly events: (
       id: string,
     ) => Effect.Effect<Stream.Stream<SourceEvent>, FileNotFound>
+    /** 열린 소스의 from~to 구간을 count장으로 다시 나눈 새 세트 (F3-6). 진행 중인 세트는 취소된다 */
+    readonly createSet: (input: {
+      readonly id: string
+      readonly count: ThumbCount
+      readonly from: number
+      readonly to: number
+    }) => Effect.Effect<SourceInfo, FileNotFound | InvalidParam>
+    /** 현재 세트의 썸네일 한 장을 다시 만든다. 결과는 기록에서 그 칸의 이벤트를 교체하고, 구독자에게도 보낸다 */
+    readonly retry: (input: {
+      readonly id: string
+      readonly setId: string
+      readonly index: number
+    }) => Effect.Effect<RetryResult, FileNotFound | InvalidParam>
   }
 >()('film/server/Jobs') {
   static readonly layer = Layer.effect(
@@ -75,6 +95,50 @@ export class Jobs extends Context.Service<
           }),
         )
 
+      /** 같은 칸의 thumb/error 이벤트를 기록에서 교체한다 (재시도). `done` 뒤에 덧붙이면 재연결 시 잘린다 */
+      const replace = (job: Job, event: RetryResult) =>
+        job.lock.withPermit(
+          Effect.gen(function* () {
+            yield* Ref.update(job.history, (h) =>
+              h.map((e) =>
+                (e.type === 'thumb' || e.type === 'error') &&
+                e.index === event.index
+                  ? event
+                  : e,
+              ),
+            )
+            yield* PubSub.publish(job.pubsub, event)
+          }),
+        )
+
+      /** 한 칸의 썸네일. 캐시에 있으면 그대로 쓴다 */
+      const extract = (job: Job, index: number) =>
+        Effect.gen(function* () {
+          const { id, setId, times } = job.info
+          const t = times[index]!
+          const out = cache.thumbPath(id, t)
+          const failure = (yield* cache.exists(out))
+            ? Option.none()
+            : yield* ffmpeg
+                .thumbnail(job.file, t, out)
+                .pipe(Effect.flip, Effect.option)
+          return Option.match(failure, {
+            onNone: (): RetryResult => ({
+              type: 'thumb',
+              setId,
+              index,
+              t,
+              url: thumbUrl(id, t),
+            }),
+            onSome: (error): RetryResult => ({
+              type: 'error',
+              setId,
+              index,
+              ...toErrorBody(error),
+            }),
+          })
+        })
+
       const generate = (job: Job) =>
         Effect.gen(function* () {
           const { id, setId, times } = job.info
@@ -83,31 +147,9 @@ export class Jobs extends Context.Service<
 
           yield* Effect.forEach(
             times,
-            (t, index) =>
+            (_, index) =>
               Effect.gen(function* () {
-                const out = cache.thumbPath(id, t)
-                const result = (yield* cache.exists(out))
-                  ? Option.none()
-                  : yield* ffmpeg
-                      .thumbnail(job.file, t, out)
-                      .pipe(Effect.flip, Effect.option)
-                yield* Option.match(result, {
-                  onNone: () =>
-                    publish(job, {
-                      type: 'thumb',
-                      setId,
-                      index,
-                      t,
-                      url: thumbUrl(id, t),
-                    }),
-                  onSome: (error) =>
-                    publish(job, {
-                      type: 'error',
-                      setId,
-                      index,
-                      ...toErrorBody(error),
-                    }),
-                })
+                yield* publish(job, yield* extract(job, index))
                 const done = yield* Ref.updateAndGet(finished, (n) => n + 1)
                 yield* publish(job, {
                   type: 'progress',
@@ -150,6 +192,7 @@ export class Jobs extends Context.Service<
         if (
           Option.isSome(existing) &&
           existing.value.info.id === input.id &&
+          existing.value.info.range === undefined &&
           existing.value.info.times.length === input.count
         ) {
           return existing.value.info
@@ -157,17 +200,33 @@ export class Jobs extends Context.Service<
 
         const file = yield* library.resolve(input.id)
         const meta = yield* loadMeta(input.id, file)
-        const setId = `s${yield* Ref.getAndUpdate(nextSet, (n) => n + 1)}`
+        return yield* start({
+          id: input.id,
+          file,
+          meta,
+          times: thumbnailTimes(meta.duration, input.count),
+        })
+      })
 
+      /** 새 세트를 등록하고 생성을 시작한다. 이전 작업은 FiberHandle이 인터럽트한다 */
+      const start = Effect.fn('Jobs.start')(function* (input: {
+        readonly id: string
+        readonly file: string
+        readonly meta: VideoMeta
+        readonly times: ReadonlyArray<number>
+        readonly range?: { readonly from: number; readonly to: number }
+      }) {
+        const setId = `s${yield* Ref.getAndUpdate(nextSet, (n) => n + 1)}`
         const job: Job = {
           info: {
-            ...meta,
+            ...input.meta,
             id: input.id,
-            name: path.basename(file),
+            name: path.basename(input.file),
             setId,
-            times: thumbnailTimes(meta.duration, input.count),
+            times: input.times,
+            ...(input.range ? { range: input.range } : {}),
           },
-          file,
+          file: input.file,
           history: yield* Ref.make<ReadonlyArray<SourceEvent>>([]),
           pubsub: yield* PubSub.unbounded<SourceEvent>(),
           lock: yield* Semaphore.make(1),
@@ -178,23 +237,84 @@ export class Jobs extends Context.Service<
         return job.info
       })
 
+      const notOpen = new FileNotFound({
+        message: '열린 소스가 아닙니다. 다시 여세요',
+      })
+
+      /** 지금 열린 소스의 작업 (다른 소스면 FileNotFound) */
+      const currentFor = (id: string) =>
+        Ref.get(current).pipe(
+          Effect.flatMap((job) =>
+            Option.isSome(job) && job.value.info.id === id
+              ? Effect.succeed(job.value)
+              : Effect.fail(notOpen),
+          ),
+        )
+
+      const createSetUnsafe = Effect.fn('Jobs.createSet')(function* (input: {
+        readonly id: string
+        readonly count: ThumbCount
+        readonly from: number
+        readonly to: number
+      }) {
+        const job = yield* currentFor(input.id)
+        const { duration } = job.info
+        const { from, to, count } = input
+        // 밀리초 단위로 나누므로 한 장당 최소 1ms는 있어야 시점이 겹치지 않는다
+        if (!(
+          from >= 0 &&
+          to <= duration &&
+          to - from >= (count + 1) * 0.001
+        )) {
+          return yield* new InvalidParam({
+            message: `구간이 올바르지 않습니다: ${from}~${to} (영상 길이 ${duration}초)`,
+          })
+        }
+        const { id, width, height, fps, codec } = job.info
+        const meta: VideoMeta = { duration, width, height, fps, codec }
+        return yield* start({
+          id,
+          file: job.file,
+          meta,
+          times: rangeTimes(from, to, count),
+          range: { from, to },
+        })
+      })
+
+      const createSet = (input: Parameters<typeof createSetUnsafe>[0]) =>
+        opening.withPermit(createSetUnsafe(input))
+
+      const retry = Effect.fn('Jobs.retry')(function* (input: {
+        readonly id: string
+        readonly setId: string
+        readonly index: number
+      }) {
+        const job = yield* currentFor(input.id)
+        if (job.info.setId !== input.setId) {
+          return yield* new InvalidParam({
+            message: '지난 세트입니다. 화면을 새로고침하세요',
+          })
+        }
+        if (
+          !Number.isInteger(input.index) ||
+          input.index < 0 ||
+          input.index >= job.info.times.length
+        ) {
+          return yield* new InvalidParam({
+            message: '썸네일 번호가 올바르지 않습니다',
+          })
+        }
+        const result = yield* extract(job, input.index)
+        yield* replace(job, result)
+        return result
+      })
+
       const open = (input: {
         readonly id: string
         readonly count: ThumbCount
       }) => opening.withPermit(openUnsafe(input))
 
-      const events = (id: string) =>
-        Ref.get(current).pipe(
-          Effect.flatMap((job) =>
-            Option.isSome(job) && job.value.info.id === id
-              ? Effect.succeed(subscribe(job.value))
-              : Effect.fail(
-                  new FileNotFound({
-                    message: '열린 소스가 아닙니다. 다시 여세요',
-                  }),
-                ),
-          ),
-        )
+      const events = (id: string) => Effect.map(currentFor(id), subscribe)
 
       const subscribe = (job: Job): Stream.Stream<SourceEvent> =>
         Stream.unwrap(
@@ -217,7 +337,7 @@ export class Jobs extends Context.Service<
           ),
         ).pipe(Stream.takeUntil((e) => e.type === 'done'))
 
-      return Jobs.of({ open, events })
+      return Jobs.of({ open, events, createSet, retry })
     }),
   )
 }

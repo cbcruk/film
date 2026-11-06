@@ -9,6 +9,10 @@ interface Props {
   readonly aspect: number
   readonly selected: number | undefined
   readonly onSelect: (index: number) => void
+  /** 실패한 칸 다시 만들기 */
+  readonly onRetry: (index: number) => void
+  /** 재시도 중인 칸 */
+  readonly retrying: ReadonlySet<number>
 }
 
 export function ThumbnailGrid({
@@ -17,12 +21,15 @@ export function ThumbnailGrid({
   aspect,
   selected,
   onSelect,
+  onRetry,
+  retrying,
 }: Props) {
   // 포커스 위치와 상관없이 ←/→로 이동한다 (Safari는 버튼을 클릭해도 포커스를 주지 않는다)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
-      if (step === 0 || e.altKey || e.metaKey || e.ctrlKey) return
+      // Shift+←/→는 미리보기의 ±1초 이동
+      if (step === 0 || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey) return
       const target = e.target as HTMLElement | null
       if (target?.closest('input, select, textarea')) return
       e.preventDefault()
@@ -43,7 +50,7 @@ export function ThumbnailGrid({
       {times.map((t, i) => {
         const thumb = thumbs[i]
         return (
-          <li key={i}>
+          <li key={i} className="card-cell">
             <button
               id={`thumb-${i}`}
               type="button"
@@ -68,6 +75,17 @@ export function ThumbnailGrid({
               </span>
               <span className="card-time">{formatTimecode(t)}</span>
             </button>
+            {thumb?.status === 'error' && (
+              // 카드 버튼 안에 버튼을 넣을 수 없어 겹쳐서 배치한다
+              <button
+                type="button"
+                className="card-retry"
+                onClick={() => onRetry(i)}
+                disabled={retrying.has(i)}
+              >
+                {retrying.has(i) ? '다시 만드는 중…' : '재시도'}
+              </button>
+            )}
           </li>
         )
       })}

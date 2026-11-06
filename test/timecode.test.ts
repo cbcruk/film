@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatTimecode,
+  rangeTimes,
   frameFilename,
   frameUrl,
   thumbnailTimes,
@@ -14,6 +15,11 @@ describe('timecode', () => {
       expect(Number(t.toFixed(3))).toBe(t)
       expect(t).toBeLessThan(215.48)
     }
+  })
+
+  it('구간 분할은 양 끝을 뺀다', () => {
+    expect(rangeTimes(10, 17, 6)).toEqual([11, 12, 13, 14, 15, 16])
+    expect(rangeTimes(0, 1, 2)).toEqual([0.333, 0.667])
   })
 
   it('타임코드 표기', () => {

@@ -6,7 +6,11 @@ import { AppConfig } from '../server/config.ts'
 import { Jobs } from '../server/jobs.ts'
 import { Library } from '../server/library.ts'
 import { runServerEffect } from '../server/runtime.ts'
-import { OpenSourceInput } from '../server/schema.ts'
+import {
+  CreateSetInput,
+  OpenSourceInput,
+  RetryInput,
+} from '../server/schema.ts'
 
 /** FILM_DIR의 영상 목록 (수정 시각 최신순) */
 export const listVideos = createServerFn({ method: 'GET' }).handler(() =>
@@ -31,4 +35,18 @@ export const openSource = createServerFn({ method: 'POST' })
   .validator(Schema.toStandardSchemaV1(OpenSourceInput))
   .handler(({ data }) =>
     runServerEffect(Effect.flatMap(Jobs, (jobs) => jobs.open(data))),
+  )
+
+/** 열린 소스의 구간을 다시 나눈 새 세트 (F3-6) */
+export const createSet = createServerFn({ method: 'POST' })
+  .validator(Schema.toStandardSchemaV1(CreateSetInput))
+  .handler(({ data }) =>
+    runServerEffect(Effect.flatMap(Jobs, (jobs) => jobs.createSet(data))),
+  )
+
+/** 실패한 썸네일 한 장 다시 만들기 */
+export const retryThumb = createServerFn({ method: 'POST' })
+  .validator(Schema.toStandardSchemaV1(RetryInput))
+  .handler(({ data }) =>
+    runServerEffect(Effect.flatMap(Jobs, (jobs) => jobs.retry(data))),
   )

@@ -224,6 +224,105 @@ describe('Jobs', () => {
     }).pipe(Effect.provide(layer))
   })
 
+  it.live('구간 재생성: 새 세트를 만들고, 전체로 돌아가면 캐시를 쓴다', () => {
+    const { layer, stats } = setup(makeDirs())
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      const full = yield* jobs.open({ id: a, count: 6 })
+      yield* collectEvents(a)
+
+      const range = yield* jobs.createSet({ id: a, count: 6, from: 10, to: 17 })
+      assert.notStrictEqual(range.setId, full.setId)
+      assert.deepStrictEqual(range.range, { from: 10, to: 17 })
+      assert.deepStrictEqual(range.times, [11, 12, 13, 14, 15, 16])
+      const events = yield* collectEvents(a)
+      assert.strictEqual(ofType(events, 'thumb').length, 6)
+      assert.isTrue(events.every((e) => e.setId === range.setId))
+
+      // 전체 세트로 돌아가기: 같은 개수라도 구간 세트를 재사용하지 않는다
+      const back = yield* jobs.open({ id: a, count: 6 })
+      assert.isUndefined(back.range)
+      assert.deepStrictEqual(back.times, full.times)
+      const calls = stats.calls
+      yield* collectEvents(a)
+      assert.strictEqual(stats.calls, calls) // 모두 캐시
+    }).pipe(Effect.provide(layer))
+  })
+
+  it.live(
+    '구간 재생성: 잘못된 구간은 InvalidParam, 열리지 않은 소스는 FileNotFound',
+    () => {
+      const { layer } = setup(makeDirs())
+      return Effect.gen(function* () {
+        const { a, b } = yield* ids
+        const jobs = yield* Jobs
+        yield* jobs.open({ id: a, count: 6 })
+        for (const [from, to] of [
+          [20, 10],
+          [10, 10],
+          [-1, 10],
+          [90, 101],
+          [10, 10.005],
+        ] as const) {
+          const error = yield* jobs
+            .createSet({ id: a, count: 6, from, to })
+            .pipe(Effect.flip)
+          assert.strictEqual(error._tag, 'InvalidParam', `${from}~${to}`)
+        }
+        const other = yield* jobs
+          .createSet({ id: b, count: 6, from: 1, to: 2 })
+          .pipe(Effect.flip)
+        assert.strictEqual(other._tag, 'FileNotFound')
+      }).pipe(Effect.provide(layer))
+    },
+  )
+
+  it.live(
+    '재시도: 실패한 칸을 다시 만들고, 늦은 구독자도 바뀐 결과를 받는다',
+    () => {
+      let broken = true
+      const { layer } = setup(makeDirs(), {
+        failWhen: (t) => broken && t === 21.2,
+      })
+      return Effect.gen(function* () {
+        const { a } = yield* ids
+        const jobs = yield* Jobs
+        const info = yield* jobs.open({ id: a, count: 6 })
+        const first = yield* collectEvents(a)
+        assert.include(ofType(first, 'error')[0]!, { index: 1 })
+
+        broken = false
+        const result = yield* jobs.retry({ id: a, setId: info.setId, index: 1 })
+        assert.include(result, { type: 'thumb', index: 1, t: 21.2 })
+
+        const replay = yield* collectEvents(a)
+        assert.strictEqual(ofType(replay, 'error').length, 0)
+        assert.strictEqual(ofType(replay, 'thumb').length, 6)
+        assert.strictEqual(replay.at(-1)?.type, 'done')
+      }).pipe(Effect.provide(layer))
+    },
+  )
+
+  it.live('재시도: 지난 세트·잘못된 번호는 InvalidParam', () => {
+    const { layer } = setup(makeDirs())
+    return Effect.gen(function* () {
+      const { a } = yield* ids
+      const jobs = yield* Jobs
+      const info = yield* jobs.open({ id: a, count: 6 })
+      const stale = yield* jobs
+        .retry({ id: a, setId: 's999', index: 0 })
+        .pipe(Effect.flip)
+      assert.strictEqual(stale._tag, 'InvalidParam')
+      for (const index of [-1, 6, 1.5]) {
+        const error = yield* jobs
+          .retry({ id: a, setId: info.setId, index })
+          .pipe(Effect.flip)
+        assert.strictEqual(error._tag, 'InvalidParam', String(index))
+      }
+    }).pipe(Effect.provide(layer))
+  })
+
   it.live('모르는 ID는 FileNotFound', () => {
     const { layer } = setup(makeDirs())
     return Effect.gen(function* () {

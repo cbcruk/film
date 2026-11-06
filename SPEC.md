@@ -97,7 +97,10 @@ FILM_DIR=~/Movies/MV
 - **F3-3** 동시 ffmpeg 프로세스 수 = `max(1, floor(os.availableParallelism() / 2))`.
 - **F3-4** 같은 소스 ID + 같은 시점의 썸네일은 캐시에서 재사용.
 - **F3-5** 새 소스를 열면 이전 소스의 진행 중 작업은 취소(프로세스 kill).
-- **F3-6** 구간 재생성: 두 시점 `from`~`to` 사이를 N장으로 다시 나눠 새 세트를 만든다. — 2차
+- **F3-6** 구간 재생성: 두 시점 `from`~`to` 사이를 N장으로 다시 나눠 새 세트를 만든다. — M5 ✅
+  - 화면: 썸네일을 선택하고 [이 구간 더 보기] → 앞뒤 썸네일 사이(끝 칸이면 세트 구간·영상 끝까지)를 같은 개수로 나눈다. 양 끝은 이미 본 장면이라 뺀다.
+  - [전체 보기]로 원래 세트로 돌아간다 (캐시라 즉시).
+- **F3-8** 실패한 썸네일 재시도: 카드의 [재시도]로 그 한 장만 다시 만든다. — M5 ✅
 - **F3-7** 장면 전환 기반 모드 (`select='gt(scene,0.3)'`). — 3차
 
 ### F4. 그리드 / 미리보기 — MVP
@@ -107,7 +110,10 @@ FILM_DIR=~/Movies/MV
 - 클릭 또는 키보드(←/→ 이동, Enter 선택)로 선택.
 - 선택 시 상단 미리보기 영역에 **원본 해상도 프레임**을 `<img>`로 표시 (화면에는 CSS로 맞춰 축소, 실제 이미지는 원본 크기).
 - 원본 프레임이 로드되는 동안 썸네일을 확대해 자리표시로 보여준다.
-- **F4-1** 미리보기에서 ±1프레임, ±1초 이동 버튼. — 2차
+- **F4-1** 미리보기에서 ±1프레임, ±1초 이동 버튼. — M5 ✅
+  - 단축키: `,` / `.` = ±1프레임, `Shift+←/→` = ±1초 (`←/→`는 썸네일 선택). 1프레임 = `1/fps`.
+  - 이동한 시점은 밀리초로 반올림하고 `0 ≤ t < duration`으로 제한한다.
+- **F1-7** 최근 연 파일: 목록 위에 최근 5개 (브라우저 `localStorage`에 최대 10개 ID). 지금 목록에 없는 ID(삭제·변경)는 숨긴다. — M5 ✅
 
 ### F5. 저장 — MVP
 
@@ -143,7 +149,7 @@ FILM_DIR=~/Movies/MV
 [브라우저 — React (TanStack Router)]
    │                                   │
    │ 서버 함수 (RPC)                    │ 서버 라우트 (HTTP: 이미지, SSE)
-   │ listVideos / openSource / createSet │ <img src>, EventSource
+   │ listVideos / openSource / createSet / retryThumb │ <img src>, EventSource
    ▼                                   ▼
 [TanStack Start 서버 (Node, 127.0.0.1)]
    └─ src/server/   서버 전용 모듈 (Effect 서비스, runtime.ts로 실행)
@@ -183,7 +189,7 @@ film/
         sources.$id.frame.$t.$filename.ts        # 원본 프레임 (저장 대상)
     functions/
       health.ts                                  # getHealth — ffmpeg·FILM_DIR 상태 (M0)
-      sources.ts                                 # listVideos, openSource, createSet (서버 함수)
+      sources.ts                                 # listVideos, openSource, createSet, retryThumb (서버 함수)
     server/                                      # 서버 전용 (Effect) — 서버 함수/라우트 핸들러 안에서만 import
       runtime.ts                                 # ManagedRuntime, runServerEffect / runRouteEffect (TanStack ↔ Effect 연결)
       errors.ts                                  # Tagged 에러 정의, 에러 → HTTP 상태/응답 변환
@@ -204,6 +210,7 @@ film/
       FramePreview.tsx
     hooks/
       useSourceEvents.ts                         # EventSource 구독
+      useRecent.ts                               # 최근 연 파일 (localStorage)
   test/
     global-setup.ts                              # 픽스처 영상 생성 (vitest globalSetup)
     fixtures/                                    # 생성된 픽스처 (git 제외). 다시 만들려면 폴더 삭제
@@ -351,11 +358,20 @@ film/
 - 같은 소스·같은 개수로 다시 열면(화면 새로고침 등) 진행 중인 세트를 그대로 돌려준다 (같은 `setId`).
 - probe 결과는 캐시의 `meta.json`을 재사용한다.
 
-#### `createSet({ id, count, from?, to? })` — POST — 2차
+#### `createSet({ id, count, from, to })` — POST — M5
 
-지정 구간(생략 시 전체)을 다시 N장으로 나눠 새 세트를 만든다.
+열린 소스의 `from`~`to` 구간을 `count`장으로 다시 나눈 새 세트를 만든다. 진행 중인 세트는 취소된다.
 
-- 반환: `{ setId }`
+- 반환: `openSource`와 같은 형태 + `range: { from, to }`. 이벤트는 같은 SSE로 새 `setId`가 온다.
+- 전체 세트로 돌아갈 때는 `openSource`를 다시 호출한다 (구간 세트는 재사용하지 않음).
+- 에러: 열린 소스가 아니면 `FILE_NOT_FOUND`, `0 ≤ from < to ≤ duration`이 아니거나 너무 좁으면(한 장당 1ms 미만) `INVALID_PARAM`
+
+#### `retryThumb({ id, setId, index })` — POST — M5
+
+현재 세트의 썸네일 한 장을 다시 만들고 결과(`thumb` 또는 `error` 이벤트)를 **응답으로** 돌려준다 — 세트가 끝나 SSE가 닫힌 뒤에도 쓸 수 있도록.
+
+- 서버의 이벤트 기록에서는 그 칸의 이벤트를 교체한다 (`done` 뒤에 덧붙이면 재연결 시 잘림). 구독 중인 연결에도 보낸다.
+- 에러: 지난 `setId`·범위 밖 `index`는 `INVALID_PARAM`
 
 ### 8-2. 서버 라우트
 
@@ -459,8 +475,8 @@ ffmpeg -v error -ss <t> -i <path> -frames:v 1 -f image2pipe -c:v <png | mjpeg -q
 | `LIBRARY_NOT_FOUND` | `LibraryNotFound`     | 503  | `FILM_DIR`이 없거나 폴더가 아님              | "영상 폴더를 찾을 수 없습니다. `.env`의 `FILM_DIR`을 확인하세요" |
 | `FILE_NOT_FOUND`    | `FileNotFound`        | 404  | 목록 이후 파일이 삭제·이동됨 / 알 수 없는 ID | "파일을 찾을 수 없습니다" + 목록 새로고침                        |
 | `NOT_A_VIDEO`       | `NotAVideo`           | 415  | 비디오 스트림 없음 / probe 실패              | "지원하지 않는 파일입니다"                                       |
-| `EXTRACT_FAILED`    | `ExtractFailed`       | 500  | 특정 시점 추출 실패                          | 해당 카드에 ⚠ (재시도 버튼은 M5)                                 |
-| `TIMEOUT`           | `FfmpegTimeout`       | 504  | ffmpeg 30초 초과                             | 해당 카드에 ⚠ (재시도 버튼은 M5)                                 |
+| `EXTRACT_FAILED`    | `ExtractFailed`       | 500  | 특정 시점 추출 실패                          | 해당 카드에 ⚠ + 재시도 버튼                                      |
+| `TIMEOUT`           | `FfmpegTimeout`       | 504  | ffmpeg 30초 초과                             | 해당 카드에 ⚠ + 재시도 버튼                                      |
 | `INVALID_PARAM`     | `ParseError` (Schema) | 400  | 검증 실패                                    | 개발자 오류 — 콘솔 로그                                          |
 
 - 에러 코드 유니온(`ErrorCode`)은 `src/lib/types.ts`에 두어 화면도 같은 코드를 쓴다.
@@ -492,7 +508,7 @@ Vitest + `@effect/vitest` 사용. `src/server/*`는 TanStack과 무관한 Effect
 | **M2** ✅ | 서버 함수 `listVideos`, `openSource`, 썸네일 작업(`jobs.ts`) + SSE 라우트                                                                                                          |
 | **M3** ✅ | 화면: 영상 목록(F1), 썸네일 그리드                                                                                                                                                 |
 | **M4** ✅ | 원본 해상도 미리보기 + [다른 이름으로 저장] 파일명·포맷 확인 (F4, F5) → **MVP 완료**                                                                                               |
-| M5        | 구간 재생성, 프레임 미세 조정, 최근 파일, 실패한 썸네일 재시도                                                                                                                     |
+| **M5** ✅ | 구간 재생성, 프레임 미세 조정, 최근 파일, 실패한 썸네일 재시도                                                                                                                     |
 | M6        | 장면 기반 모드                                                                                                                                                                     |
 
 ## 14. 열린 질문

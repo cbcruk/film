@@ -57,7 +57,14 @@ export interface SourceInfo extends VideoMeta {
   readonly name: string
   readonly setId: string
   readonly times: ReadonlyArray<number>
+  /** 구간 재생성 세트면 그 구간 (전체 세트면 없음) */
+  readonly range?: { readonly from: number; readonly to: number }
 }
+
+/** 썸네일 한 장 재시도 결과 */
+export type RetryResult =
+  | Extract<SourceEvent, { type: 'thumb' }>
+  | (Extract<SourceEvent, { type: 'error' }> & { readonly index: number })
 
 /** SSE 이벤트 (event 이름 = type) */
 export type SourceEvent =

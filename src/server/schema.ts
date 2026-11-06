@@ -22,6 +22,22 @@ export const OpenSourceInput = Schema.Struct({
   count: ThumbCount,
 })
 
+/** 초 단위 시점 (JSON 숫자) */
+export const Seconds = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const CreateSetInput = Schema.Struct({
+  id: SourceId,
+  count: ThumbCount,
+  from: Seconds,
+  to: Seconds,
+})
+
+export const RetryInput = Schema.Struct({
+  id: SourceId,
+  setId: Schema.String.check(Schema.isPattern(/^s\d+$/)),
+  index: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+})
+
 /** 서버 라우트 파라미터 검증. 실패하면 InvalidParam (400) */
 export const decodeParams =
   <S extends Schema.Top & { readonly DecodingServices: never }>(schema: S) =>

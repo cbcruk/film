@@ -354,3 +354,69 @@ button {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* M5: 최근 목록, 재시도, 시점 이동, 구간 */
+.list-label {
+  padding: 10px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.card-cell {
+  position: relative;
+}
+
+.card-retry {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  translate: -50% 0;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.preview-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+
+.steps {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.steps button {
+  padding: 4px 10px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps button:last-child {
+  border-right: 0;
+}
+
+.more,
+.range button {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.range {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+}

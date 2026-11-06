@@ -10,6 +10,11 @@ interface Props {
   readonly format: FrameFormat
   readonly formats: ReadonlyArray<FrameFormat>
   readonly onFormat: (format: FrameFormat) => void
+  /** 미리보기 시점을 seconds만큼 옮긴다 (±1프레임·±1초) */
+  readonly onStep: (seconds: number) => void
+  /** 이 시점 앞뒤 썸네일 사이를 다시 나눈다. 없으면 버튼을 숨긴다 */
+  readonly onMore: (() => void) | undefined
+  readonly busy: boolean
 }
 
 const LABELS: Record<FrameFormat, string> = {
@@ -29,7 +34,11 @@ export function FramePreview({
   format,
   formats,
   onFormat,
+  onStep,
+  onMore,
+  busy,
 }: Props) {
+  const frame = 1 / (info.fps > 0 ? info.fps : 30)
   const src = frameUrl(info.id, info.name, t, format)
   // 어느 URL이 로드·실패했는지로 상태를 정한다 (캐시된 이미지는 onLoad가 바로 올 수 있음)
   const [result, setResult] = useState<{ src: string; ok: boolean }>()
@@ -67,6 +76,33 @@ export function FramePreview({
           <span className="preview-badge error">
             원본 프레임을 만들지 못했습니다
           </span>
+        )}
+      </div>
+
+      <div className="preview-tools">
+        <span className="steps" role="group" aria-label="시점 이동">
+          <button type="button" onClick={() => onStep(-1)} title="Shift+←">
+            −1초
+          </button>
+          <button type="button" onClick={() => onStep(-frame)} title=",">
+            −1프레임
+          </button>
+          <button type="button" onClick={() => onStep(frame)} title=".">
+            +1프레임
+          </button>
+          <button type="button" onClick={() => onStep(1)} title="Shift+→">
+            +1초
+          </button>
+        </span>
+        {onMore && (
+          <button
+            type="button"
+            className="more"
+            onClick={onMore}
+            disabled={busy}
+          >
+            {busy ? '만드는 중…' : '이 구간 더 보기'}
+          </button>
         )}
       </div>
 
