@@ -251,8 +251,9 @@ film/
 - 검증: **Effect Schema** → `Schema.toStandardSchemaV1(...)`로 서버 함수 `.validator()`에 연결
 - 테스트: **Vitest 5** + `@effect/vitest`
 - 포맷: **Prettier** (`semi: false`, `singleQuote: true`)
-- 실행: `npm run dev` → `vite dev --host 127.0.0.1 --port 3000`
-  - 로컬 도구라 상시 실행도 dev 모드로 충분하다. 빌드 실행(`npm start`)은 필요해지면 추가.
+- 패키지 관리: **pnpm 12** (`packageManager`). `@astryxdesign/*`의 postinstall은 `astryx init` 안내 출력뿐이라 `pnpm-workspace.yaml`의 `allowBuilds`에서 막아 둔다
+- 실행: `pnpm dev` → `vite dev --host 127.0.0.1 --port 3000`
+  - 로컬 도구라 상시 실행도 dev 모드로 충분하다. 빌드 실행(`pnpm start`)은 필요해지면 추가.
 
 ### 7-1. Effect 적용 설계
 

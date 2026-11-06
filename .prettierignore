@@ -4,7 +4,7 @@ dist
 .nitro
 .tanstack
 coverage
-package-lock.json
+pnpm-lock.yaml
 src/routeTree.gen.ts
 AGENTS.md
 GEMINI.md
